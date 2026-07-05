@@ -1,0 +1,46 @@
+[workspace]
+name = "rv-there-yet-head-tracking"
+version = "0.0.0"
+description = "Head tracking mod for RV There Yet (UE5, Steam/Xbox WinGDK) using CameraUnlock shared library"
+channels = ["conda-forge"]
+platforms = ["win-64"]
+
+[dependencies]
+cmake = ">=3.28"
+
+[tasks]
+sync = "git submodule update --remote cameraunlock-core"
+
+# Configure CMake (x64, MSVC, UE5/WinGDK target)
+setup = { cmd = """
+    powershell -Command "if (-not (Test-Path 'build')) { cmake -B build -G 'Visual Studio 17 2022' -A x64 } else { Write-Host 'Build directory exists, skipping setup' -ForegroundColor Yellow }"
+""" }
+
+build = { cmd = "cmake --build build --config Release", depends-on = ["setup"] }
+build-debug = { cmd = "cmake --build build --config Debug", depends-on = ["setup"] }
+
+install = { cmd = "powershell -ExecutionPolicy Bypass -File scripts/deploy.ps1 Release", depends-on = ["build"] }
+uninstall = "powershell -ExecutionPolicy Bypass -File scripts/uninstall.ps1"
+
+package = { cmd = "powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1", depends-on = ["build"] }
+
+# Shim-only mod: no mod loader is vendored (the dxgi.dll proxy IS the shim).
+# Kept as a no-op so the launcher/dev workflow can call it uniformly.
+update-deps = { cmd = """
+    powershell -Command "Write-Host 'No vendored dependencies to update (shim-only mod).'"
+""" }
+
+clean = { cmd = """
+    powershell -Command "if (Test-Path 'build') { Remove-Item 'build' -Recurse -Force }; Write-Host 'Build artifacts cleaned' -ForegroundColor Green"
+""" }
+
+# Full release workflow - creates tag and pushes to trigger CI release
+release = "powershell -ExecutionPolicy Bypass -File scripts/release.ps1"
+
+# Run a Ghidra headless script from scripts/ghidra/ against the game EXE.
+ghidra-script = "powershell -ExecutionPolicy Bypass -File scripts/ghidra-headless.ps1"
+
+# Compare the installed RV There Yet EXE's PE fingerprint against every build
+# profile in src/RVThereYetHeadTracking/builds/. Run after a game patch to find
+# out whether RVAs need rederiving before cutting a new release.
+check-fingerprint = "powershell -ExecutionPolicy Bypass -File scripts/check-fingerprint.ps1"

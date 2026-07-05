@@ -1,0 +1,120 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish release
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Extract version from tag
+        id: version
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          if ($tag -notmatch '^v(\d+\.\d+\.\d+)$') {
+            Write-Host "::error::Tag '$tag' is not a valid vX.Y.Z release tag"
+            exit 1
+          }
+          $version = $Matches[1]
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "Release version: $version"
+
+      - name: Validate version matches pixi.toml
+        shell: pwsh
+        run: |
+          $expected = "${{ steps.version.outputs.version }}"
+          $match = Select-String -Path pixi.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1
+          if (-not $match) {
+            Write-Host "::error::Could not find version in pixi.toml"
+            exit 1
+          }
+          $actual = $match.Matches[0].Groups[1].Value
+          if ($actual -ne $expected) {
+            Write-Host "::error::Tag version $expected does not match pixi.toml version $actual"
+            exit 1
+          }
+          Write-Host "Version $actual matches tag"
+
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v3
+
+      - name: Set up pixi
+        uses: prefix-dev/setup-pixi@v0.9.6
+
+      - name: Build and package
+        shell: pwsh
+        run: |
+          pixi run package
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error::Packaging failed"
+            exit 1
+          }
+
+      - name: Generate release notes
+        shell: pwsh
+        run: |
+          ./cameraunlock-core/scripts/generate-release-notes.ps1 `
+            -Version "${{ steps.version.outputs.version }}" `
+            -ArtifactPaths 'src/', 'cameraunlock-core/', 'scripts/install.cmd', 'scripts/uninstall.cmd' `
+            -OutputFile release-notes.txt
+
+      - name: Find release ZIPs
+        id: zips
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem release/*-installer.zip | Select-Object -First 1
+          $nexus = Get-ChildItem release/*-nexus.zip | Select-Object -First 1
+          if (-not $installer) { Write-Host "::error::installer ZIP not found"; exit 1 }
+          if (-not $nexus)     { Write-Host "::error::nexus ZIP not found"; exit 1 }
+          "installer=$($installer.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "nexus=$($nexus.FullName)"         | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Create GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$env:GITHUB_REF_NAME" `
+            --title "RV There Yet Head Tracking $env:GITHUB_REF_NAME" `
+            --notes-file release-notes.txt `
+            "${{ steps.zips.outputs.installer }}" `
+            "${{ steps.zips.outputs.nexus }}"
+
+      - name: Announce release to Discord
+        shell: pwsh
+        env:
+          DISCORD_RELEASE_WEBHOOK: ${{ secrets.DISCORD_RELEASE_WEBHOOK }}
+        run: |
+          if (-not $env:DISCORD_RELEASE_WEBHOOK) {
+            Write-Host "::notice::DISCORD_RELEASE_WEBHOOK not set; skipping Discord announcement."
+            exit 0
+          }
+          $tag  = "${{ github.ref_name }}"
+          $repo = "${{ github.repository }}"
+          $name = (Get-Culture).TextInfo.ToTitleCase(((($repo -split '/')[-1]) -replace '-head-?tracking$','' -replace '-',' '))
+          $url  = "https://github.com/$repo/releases/tag/$tag"
+          $payload = @{
+            username = 'Loopy Releases'
+            embeds   = @(@{
+              title       = "$name Head Tracking $tag"
+              url         = $url
+              description = "A new release of **$name Head Tracking** is live.`n`n**[Download the $tag release]($url)**"
+              color       = 5814783
+            })
+          } | ConvertTo-Json -Depth 5
+          Invoke-RestMethod -Uri $env:DISCORD_RELEASE_WEBHOOK -Method Post -ContentType 'application/json' -Body $payload
+          Write-Host "Announced $tag to Discord."
