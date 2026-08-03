@@ -123,11 +123,26 @@ namespace RVThereYetHeadTracking
             return f;
         }
 
+        void Recenter()
+        {
+            if (!g_receiver) return;
+            g_receiver->Recenter();
+            g_interp.Reset();
+            g_hasSmoothed = false;
+            g_posCenterPending.store(true);
+            Log::Line("Recenter");
+        }
+
         // Read the tracker, interpolate to frame rate, smooth, apply per-axis
         // sensitivity/inversion. Returns false when no tracker data is
         // available, in which case the view is left clean (hold-vanilla).
         bool GetProcessedRotation(float& outYaw, float& outPitch, float& outRoll)
         {
+            if (g_receiver->TryConsumeRecenterRequest()) {
+                Recenter();
+                Log::Line("Recentered by tracker app");
+            }
+
             float rawYaw = 0.0f, rawPitch = 0.0f, rawRoll = 0.0f;
             if (!g_receiver->GetRotation(rawYaw, rawPitch, rawRoll)) {
                 return false;
@@ -617,13 +632,7 @@ namespace RVThereYetHeadTracking
 
             g_hotkeys = std::make_unique<cameraunlock::input::HotkeyPoller>();
             const auto recenter = []() {
-                if (g_receiver) {
-                    g_receiver->Recenter();
-                    g_interp.Reset();
-                    g_hasSmoothed = false;
-                    g_posCenterPending.store(true);  // re-zero head sway too
-                    Log::Line("Recenter");
-                }
+                Recenter();
             };
             const auto toggleTracking = []() {
                 const bool now = !g_trackingEnabled.load();
