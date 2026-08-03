@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.0] - 2026-08-03
+
+### Added
+
+- honor recenter requests from the tracker app
+
+### Other
+
+- Link Discord, Lopari and Headcam from the README
+
 ## [0.1.0] - 2026-07-10
 
 ### Added
