@@ -28,9 +28,14 @@ namespace RVThereYetHeadTracking::reticle
 
         constexpr double kPi = 3.14159265358979323846;
 
-        // Rate limit for periodic diagnostic log lines on the hot path, so the
-        // per-frame reticle/aim math doesn't flood the log.
+        // Rate limits for the aim-offset diagnostic on the hot path. It answers
+        // a calibration question (does the projected offset match the widget
+        // scale and FOV), which is settled in the opening seconds, so it runs
+        // tight for the first kLogBurstLines and then backs off. At the old flat
+        // 2s it added about 225 KB an hour and buried the startup chain.
         constexpr std::uint64_t kLogThrottleMs = 2000;
+        constexpr std::uint64_t kLogSteadyMs = 60000;
+        constexpr int kLogBurstLines = 10;
 
         // Widget moves are throttled to ~100 Hz: the builder fires several
         // times per frame and ProcessEvent is a script-VM call.
@@ -164,24 +169,38 @@ namespace RVThereYetHeadTracking::reticle
                     Log::Line("reticle: viewport DPI scale = %.4f (auto-applied)", g_viewportDpiScale);
                 }
             }
+        }
 
-            // Also log the slate/widget viewport size (the space
-            // RenderTransform.Translation is expressed in) as a diagnostic -
-            // it can differ from the render viewport under reduced internal
-            // resolution, which shows up as a reticle scale mismatch.
+        // Log the slate/widget viewport size (the space
+        // RenderTransform.Translation is expressed in) as a diagnostic - it can
+        // differ from the render viewport under reduced internal resolution,
+        // which shows up as a reticle scale mismatch.
+        //
+        // Logged on change, not once: the size also moves on a resolution
+        // switch, a windowed/fullscreen toggle and a move to another monitor,
+        // so a latched first read would report a stale size to a player whose
+        // mismatch appeared after one of those. A first read of (0,0) or (1,1)
+        // is the widget reporting before layout, so it is skipped and retried.
+        void LogViewportSize(std::uintptr_t worldCtxWidget)
+        {
+            if (!g_processEvent || !worldCtxWidget || !g_widgetLayoutCDO) return;
             static std::uintptr_t s_getViewportSizeFn = 0;
             if (!s_getViewportSizeFn)
                 s_getViewportSizeFn = ue::FindLiveObject("Function", "GetViewportSize", "WidgetLayoutLibrary");
-            if (s_getViewportSizeFn) {
-                struct { std::uintptr_t WorldContextObject; double RX, RY; char pad[16]; } vs{};
-                vs.WorldContextObject = worldCtxWidget;
-                if (SafeProcessEvent(reinterpret_cast<void*>(g_widgetLayoutCDO),
-                                     reinterpret_cast<void*>(s_getViewportSizeFn), &vs)) {
-                    if (vs.RX > 1.0 && vs.RY > 1.0) {
-                        Log::Line("reticle: widget viewport size = %.0f x %.0f", vs.RX, vs.RY);
-                    }
-                }
-            }
+            if (!s_getViewportSizeFn) return;
+
+            struct { std::uintptr_t WorldContextObject; double RX, RY; char pad[16]; } vs{};
+            vs.WorldContextObject = worldCtxWidget;
+            if (!SafeProcessEvent(reinterpret_cast<void*>(g_widgetLayoutCDO),
+                                  reinterpret_cast<void*>(s_getViewportSizeFn), &vs)) return;
+            if (vs.RX <= 1.0 || vs.RY <= 1.0) return;
+
+            static double s_loggedX = 0.0;
+            static double s_loggedY = 0.0;
+            if (vs.RX == s_loggedX && vs.RY == s_loggedY) return;
+            s_loggedX = vs.RX;
+            s_loggedY = vs.RY;
+            Log::Line("reticle: widget viewport size = %.0f x %.0f", vs.RX, vs.RY);
         }
 
         // Read the reticle widget's accumulated geometry scale via
@@ -414,6 +433,7 @@ namespace RVThereYetHeadTracking::reticle
             // Resolve the viewport DPI scale once, using a live target widget
             // as the world context.
             if (!g_dpiResolved) ResolveDpiScale(g_targets.front().obj);
+            LogViewportSize(g_targets.front().obj);
             ResolveWidgetScale();
 
             // RenderTransform.Translation is in the widget's LOCAL space, so
@@ -470,9 +490,13 @@ namespace RVThereYetHeadTracking::reticle
             dy = -k * (aim.Z / aim.X) * static_cast<double>(g_vScale);
 
             static std::uint64_t s_lastLog = 0;
+            static int s_logCount = 0;
             const std::uint64_t now = GetTickCount64();
-            if (now - s_lastLog >= kLogThrottleMs) {
+            const std::uint64_t interval =
+                s_logCount < kLogBurstLines ? kLogThrottleMs : kLogSteadyMs;
+            if (now - s_lastLog >= interval) {
                 s_lastLog = now;
+                ++s_logCount;
                 Log::Line("aim-offset: vw=%.0f fov=%.1f scale=%.2f vscale=%.2f aim=(%.3f,%.3f,%.3f) -> dx=%.1f dy=%.1f",
                     vw, fovDeg, g_scale, g_vScale, aim.X, aim.Y, aim.Z, dx, dy);
             }

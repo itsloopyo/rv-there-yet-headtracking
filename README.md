@@ -145,7 +145,6 @@ Two equivalent binding sets - use whichever your keyboard has:
 
 | Action                          | Nav-cluster | Chord          |
 |---------------------------------|-------------|----------------|
-| Recenter                        | `Home`      | `Ctrl+Shift+T` |
 | Toggle tracking                 | `End`       | `Ctrl+Shift+Y` |
 | Cycle tracking mode             | `Page Up`   | `Ctrl+Shift+G` |
 | Toggle yaw mode (world / local) | `Page Down` | `Ctrl+Shift+H` |
@@ -179,47 +178,54 @@ If you installed the game to another drive or folder, use that install's
 Port = 4242            ; OpenTrack UDP port
 
 [Tracking]
-EnableOnStartup = true ; start with tracking active
+; start with tracking active
+EnableOnStartup = true
 YawSensitivity = 1.0   ; multiplier for left/right look
 PitchSensitivity = 1.0 ; multiplier for up/down look
 RollSensitivity = 1.0  ; multiplier for head tilt
 InvertYaw = false
 InvertPitch = false
 InvertRoll = false
-Smoothing = 0.0        ; 0.0 = responsive, 1.0 = heavy (0.15 floor applied internally)
-ShowReticle = true     ; move the game's reticle to the aim point
-WorldSpaceYaw = true   ; true = horizon-locked yaw (default), false = camera-local
+LocalSmoothing = 0.0   ; tracker on this PC (loopback); 0.0 = responsive, 1.0 = heavy
+RemoteSmoothing = 0.15 ; tracker on a network device (eg a phone over WiFi)
+; move the game's reticle to the aim point
+ShowReticle = true
+; true = horizon-locked yaw (default), false = camera-local
+WorldSpaceYaw = true
 
 [Reticle]
 Scale = 1.0            ; reticle follow strength (1.0 = geometric aim point)
 VerticalScale = 1.0    ; extra vertical-only multiplier for the reticle follow
-WidgetNames =          ; UMG widgets moved to the aim point; blank = built-in
-                       ; defaults (Crosshair, LookAtObjectName)
+; UMG widgets moved to the aim point; blank = built-in defaults
+; (Crosshair, LookAtObjectName). Leave the value empty, with nothing after
+; the "=" - any text there, comment included, is taken as a widget name.
+WidgetNames =
 
 [Position]
-Enabled = true         ; 6DOF head position tracking
+; 6DOF head position tracking
+Enabled = true
 SensitivityX = 1.0
 SensitivityY = 1.0
 SensitivityZ = 1.0
-InvertX = true         ; sideways lean direction (inverted for this game)
-InvertY = false        ; vertical move direction
-InvertZ = true         ; forward/back lean direction (inverted for this game)
+; sideways lean direction (inverted for this game)
+InvertX = true
+; vertical move direction
+InvertY = false
+; forward/back lean direction (inverted for this game)
+InvertZ = true
 LimitX = 0.30          ; max sideways lean in meters
 LimitY = 0.20          ; max vertical move in meters
 ; Z is inverted for this game, so the generous forward range lives on
 ; LimitZBack and the restricted backward range on LimitZ.
 LimitZ = 0.10
 LimitZBack = 0.40
-Smoothing = 0.15
+; Position uses the [Tracking] LocalSmoothing / RemoteSmoothing values.
 
 [Hotkeys]
-; Recenter (Home), toggle tracking (End), and cycle tracking mode (Page Up)
-; are fixed, each also reachable with a Ctrl+Shift chord. Only the yaw-mode
-; toggle is rebindable here. VK code: PageDown = 0x22.
+; Toggle tracking (End) and cycle tracking mode (Page Up) are fixed, each also
+; reachable with a Ctrl+Shift chord. Only the yaw-mode toggle is rebindable
+; here. VK code: PageDown = 0x22.
 ToggleYawMode = 0x22
-
-[Debug]
-Logging = true         ; write RVThereYetHeadTracking.log next to the exe
 ```
 
 ## Troubleshooting
@@ -240,11 +246,19 @@ Logging = true         ; write RVThereYetHeadTracking.log next to the exe
 - Verify OpenTrack is running and its Output is sending to `127.0.0.1:4242`.
 - A firewall may be blocking UDP on port 4242; allow it.
 
+**View is off-centre**
+
+- Centre in your tracker app: OpenTrack's Center bind, the CENTER button in a
+  phone app, or your headset's own centring. The mod applies what the tracker
+  sends and keeps no centre of its own, so the tracker is the only place to
+  set one.
+
 **Jittery / unstable tracking**
 
-- Raise `Smoothing` in `[Tracking]` toward 0.3-0.5.
-- On a wireless or phone tracker, expect more jitter; the built-in 0.15
-  smoothing floor helps but more smoothing reduces it further.
+- Raise `RemoteSmoothing` (phone or other network tracker) or `LocalSmoothing`
+  (tracker on this PC) in `[Tracking]` toward 0.3-0.5.
+- On a wireless or phone tracker, expect more jitter; `RemoteSmoothing` already
+  defaults to 0.15 for that case, and raising it reduces jitter further.
 
 **Wrong rotation axis**
 

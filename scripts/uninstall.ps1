@@ -106,7 +106,7 @@ $legacyFiles = @('RVThereYetHeadTracking.asi')
 # filenames. We cannot attribute them, so they only come out under -Force,
 # mirroring the launcher contract for unattributed loader files.
 $ambiguousLegacyFiles = @('winmm.dll', 'dinput8.dll', 'xinput1_3.dll')
-$logArtefacts = @('RVThereYetHeadTracking.log')
+$logArtefacts = @('RVThereYetHeadTracking.log', 'RVThereYetHeadTracking.prev.log')
 
 Write-Host ""
 Write-Host "=== RV There Yet Head Tracking - Uninstall ===" -ForegroundColor Cyan

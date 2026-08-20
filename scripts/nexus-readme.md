@@ -119,7 +119,6 @@ keep one.
 
 | Action                          | Nav-cluster | Chord          |
 |---------------------------------|-------------|----------------|
-| Recenter                        | `Home`      | `Ctrl+Shift+T` |
 | Toggle tracking                 | `End`       | `Ctrl+Shift+Y` |
 | Cycle tracking mode             | `Page Up`   | `Ctrl+Shift+G` |
 | Toggle yaw mode (world / local) | `Page Down` | `Ctrl+Shift+H` |

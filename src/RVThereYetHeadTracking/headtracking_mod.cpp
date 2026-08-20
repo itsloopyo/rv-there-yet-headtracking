@@ -96,7 +96,15 @@ namespace RVThereYetHeadTracking
         float g_smoothedYaw = 0.0f, g_smoothedPitch = 0.0f, g_smoothedRoll = 0.0f;
         bool  g_hasSmoothed = false;
 
-        float g_userSmoothing = 0.0f;
+        // Smoothing is chosen per connection: local for a tracker on this
+        // machine (loopback), remote for a device on the network. Both cover
+        // rotation and position.
+        float g_localSmoothing = 0.0f;
+        float g_remoteSmoothing = 0.15f;
+        bool  g_isRemoteConnection = false;
+        // Tri-state: false/false is indistinguishable from a local tracker, so
+        // a plain equality check never reports the (common) local case at all.
+        bool  g_remoteConnectionKnown = false;
         float g_yawSens = 1.0f, g_pitchSens = 1.0f, g_rollSens = 1.0f;
         bool  g_invertYaw = false, g_invertPitch = false, g_invertRoll = false;
 
@@ -104,7 +112,6 @@ namespace RVThereYetHeadTracking
         cameraunlock::PositionProcessor   g_posProcessor;
         cameraunlock::PositionInterpolator g_posInterp;
         FrameClock g_posClock;
-        std::atomic<bool> g_posCenterPending{true};
 
         // High-resolution timer for sub-frame frame-boundary detection.
         std::uint64_t QpcNow()
@@ -123,14 +130,21 @@ namespace RVThereYetHeadTracking
             return f;
         }
 
-        void Recenter()
+        // Re-selects local vs remote smoothing when the tracker source changes.
+        // Called every frame, before the pipeline runs.
+        void SyncConnectionLocality()
         {
-            if (!g_receiver) return;
-            g_receiver->Recenter();
-            g_interp.Reset();
-            g_hasSmoothed = false;
-            g_posCenterPending.store(true);
-            Log::Line("Recenter");
+            const bool isRemote = g_receiver->IsRemoteConnection();
+            if (g_remoteConnectionKnown && isRemote == g_isRemoteConnection) return;
+            g_isRemoteConnection = isRemote;
+            g_remoteConnectionKnown = true;
+
+            g_posProcessor.SetIsRemoteConnection(isRemote);
+
+            const double effective = cameraunlock::math::GetEffectiveSmoothing(
+                g_localSmoothing, g_remoteSmoothing, isRemote);
+            Log::Line("Tracker connection is %s; smoothing=%.3f",
+                isRemote ? "remote" : "local", effective);
         }
 
         // Read the tracker, interpolate to frame rate, smooth, apply per-axis
@@ -138,15 +152,15 @@ namespace RVThereYetHeadTracking
         // available, in which case the view is left clean (hold-vanilla).
         bool GetProcessedRotation(float& outYaw, float& outPitch, float& outRoll)
         {
-            if (g_receiver->TryConsumeRecenterRequest()) {
-                Recenter();
-                Log::Line("Recentered by tracker app");
-            }
-
             float rawYaw = 0.0f, rawPitch = 0.0f, rawRoll = 0.0f;
             if (!g_receiver->GetRotation(rawYaw, rawPitch, rawRoll)) {
                 return false;
             }
+
+            // After the data check: the locality flag only means anything once
+            // a packet has been classified, and reporting it before then would
+            // announce a tracker that has not connected.
+            SyncConnectionLocality();
 
             const float dt = g_rotClock.Tick();
             const std::int64_t ts = g_receiver->GetLastReceiveTimestamp();
@@ -156,7 +170,8 @@ namespace RVThereYetHeadTracking
             auto interp = g_interp.Update(rawYaw, rawPitch, rawRoll, isNew, dt);
 
             const float eff = static_cast<float>(
-                cameraunlock::math::GetEffectiveSmoothing(g_userSmoothing));
+                cameraunlock::math::GetEffectiveSmoothing(
+                    g_localSmoothing, g_remoteSmoothing, g_isRemoteConnection));
             if (!g_hasSmoothed) {
                 g_smoothedYaw = interp.yaw;
                 g_smoothedPitch = interp.pitch;
@@ -188,12 +203,6 @@ namespace RVThereYetHeadTracking
             const float dt = g_posClock.Tick();
             const std::int64_t ts = g_receiver->GetLastReceiveTimestamp();
             cameraunlock::PositionData raw(px, py, pz, ts);
-
-            if (g_posCenterPending.exchange(false)) {
-                g_posProcessor.SetCenter(raw);
-                g_posProcessor.ResetSmoothing();
-                g_posInterp.Reset();
-            }
 
             const cameraunlock::PositionData interp = g_posInterp.Update(raw, dt);
             const cameraunlock::math::Quat4 headQ =
@@ -481,6 +490,31 @@ namespace RVThereYetHeadTracking
             return v;
         }
 
+        // Warned once per process rather than once per load: config is
+        // reloadable, and repeating this on every reload buries it.
+        //
+        // The old value is deliberately NOT migrated into the new keys. The
+        // single smoothing value carried a hidden 0.15 floor, so the number in
+        // an existing config does not mean what it used to: copying it across
+        // would hand a local user smoothing they never chose under the new
+        // semantics, and copying it into only one of the two keys would be a
+        // guess about which connection they were on.
+        void WarnRetiredSmoothingKey(const cameraunlock::IniReader& ini,
+                                     const char* section, const char* key)
+        {
+            static bool warned = false;
+            if (warned) return;
+            if (ini.ReadString(section, key, "").empty()) return;
+            warned = true;
+            Log::Line("config: key [%s] %s has been retired and is IGNORED. Smoothing is "
+                "now two keys: LocalSmoothing (default 0, applies to a tracker on this "
+                "machine) and RemoteSmoothing (default 0.15, applies to a tracker on the "
+                "network). The old value is not migrated because the semantics changed - "
+                "it carried a hidden 0.15 floor that no longer exists. Set the two new "
+                "keys.",
+                section, key);
+        }
+
         // Read HeadTracking.ini next to the DLL. Absent file / keys fall back
         // to the shipped defaults (a filesystem boundary, so defaults here are
         // correct). Returns the resolved UDP port and yaw-mode hotkey.
@@ -513,7 +547,10 @@ namespace RVThereYetHeadTracking
             g_invertYaw   = ini.ReadBool("Tracking", "InvertYaw", false);
             g_invertPitch = ini.ReadBool("Tracking", "InvertPitch", false);
             g_invertRoll  = ini.ReadBool("Tracking", "InvertRoll", false);
-            g_userSmoothing = ReadFiniteFloat(ini, "Tracking", "Smoothing", 0.0f);
+            g_localSmoothing  = ReadFiniteFloat(ini, "Tracking", "LocalSmoothing", 0.0f);
+            g_remoteSmoothing = ReadFiniteFloat(ini, "Tracking", "RemoteSmoothing", 0.15f);
+            WarnRetiredSmoothingKey(ini, "Tracking", "Smoothing");
+            WarnRetiredSmoothingKey(ini, "Position", "Smoothing");
             g_worldSpaceYaw.store(ini.ReadBool("Tracking", "WorldSpaceYaw", true));
             outYawModeKey = ini.ReadHex("Hotkeys", "ToggleYawMode", outYawModeKey);
 
@@ -529,7 +566,10 @@ namespace RVThereYetHeadTracking
             ps.limit_y = ReadFiniteFloat(ini, "Position", "LimitY", 0.20f);
             ps.limit_z = ReadFiniteFloat(ini, "Position", "LimitZ", 0.40f);
             ps.limit_z_back = ReadFiniteFloat(ini, "Position", "LimitZBack", 0.10f);
-            ps.smoothing = ReadFiniteFloat(ini, "Position", "Smoothing", 0.15f);
+            // Position shares the [Tracking] smoothing parameters; the connection
+            // flag that picks between them lives on the processor.
+            ps.local_smoothing = g_localSmoothing;
+            ps.remote_smoothing = g_remoteSmoothing;
             g_posProcessor.SetSettings(ps);
 
             reticle::Settings rs;
@@ -554,13 +594,14 @@ namespace RVThereYetHeadTracking
             reticle::Configure(rs);
 
             Log::Line("config: port=%d enable=%s sens(Y/P/R)=%.2f/%.2f/%.2f "
-                "invert(Y/P/R)=%d/%d/%d smoothing=%.2f worldYaw=%s "
-                "position=%s posSmoothing=%.2f",
+                "invert(Y/P/R)=%d/%d/%d localSmoothing=%.2f remoteSmoothing=%.2f "
+                "worldYaw=%s position=%s",
                 outPort, g_trackingEnabled.load() ? "true" : "false",
                 g_yawSens, g_pitchSens, g_rollSens,
                 g_invertYaw, g_invertPitch, g_invertRoll,
-                g_userSmoothing, g_worldSpaceYaw.load() ? "true" : "false",
-                g_positionEnabled.load() ? "true" : "false", ps.smoothing);
+                g_localSmoothing, g_remoteSmoothing,
+                g_worldSpaceYaw.load() ? "true" : "false",
+                g_positionEnabled.load() ? "true" : "false");
         }
 
         // Off-thread gameplay detector. A gameplay HUD widget is live only
@@ -600,8 +641,26 @@ namespace RVThereYetHeadTracking
         DWORD WINAPI BootstrapThread(LPVOID module)
         {
             g_bootstrapTick = GetTickCount64();
-            Log::Open(DllDir(module) + L"RVThereYetHeadTracking.log");
+            const std::wstring logDir = DllDir(module);
+            const std::wstring logPath = logDir + L"RVThereYetHeadTracking.log";
+            // Keep one previous generation. The crash handler installed below
+            // writes its report into this log, and the user relaunches before
+            // sending it - a plain truncate would erase the very report we
+            // installed the handler for.
+            const BOOL  rotated   = MoveFileExW(logPath.c_str(),
+                (logDir + L"RVThereYetHeadTracking.prev.log").c_str(),
+                MOVEFILE_REPLACE_EXISTING);
+            const DWORD rotateErr = rotated ? 0u : GetLastError();
+            Log::Open(logPath);
             Log::Line("RV There Yet Head Tracking - bootstrap");
+            // The open above truncates regardless, so a failed rotation loses
+            // the previous session and .prev.log holds something older than the
+            // README promises. ERROR_FILE_NOT_FOUND is a first launch.
+            if (!rotated && rotateErr != ERROR_FILE_NOT_FOUND) {
+                Log::Line("WARN: could not rotate the previous log to "
+                    "RVThereYetHeadTracking.prev.log (error %lu); that file holds an "
+                    "older session, not the previous launch", rotateErr);
+            }
             Log::Line("Version: %s (%s)", RVTY_MOD_VERSION, RVTY_GIT_SHA);
             Log::Line("Process: PID=%lu", GetCurrentProcessId());
 
@@ -631,9 +690,6 @@ namespace RVThereYetHeadTracking
             Log::Line("UDP receiver Start(%d) -> %s", udpPort, bound ? "bound" : "retry-scheduled");
 
             g_hotkeys = std::make_unique<cameraunlock::input::HotkeyPoller>();
-            const auto recenter = []() {
-                Recenter();
-            };
             const auto toggleTracking = []() {
                 const bool now = !g_trackingEnabled.load();
                 g_trackingEnabled.store(now);
@@ -646,7 +702,6 @@ namespace RVThereYetHeadTracking
                 g_trackingMode.store(next);
                 g_rotationEnabled.store(next != 2);
                 g_positionEnabled.store(next != 1);
-                g_posCenterPending.store(true);
                 static const char* names[] = {
                     "NORMAL (rotation + position)",
                     "ROTATION ONLY (position off)",
@@ -660,9 +715,6 @@ namespace RVThereYetHeadTracking
                 Log::Line("yaw-mode -> %s", now ? "WORLD (horizon-locked)" : "LOCAL (camera-local)");
             };
 
-            // Recenter: Home / Ctrl+Shift+T
-            g_hotkeys->SetRecenterKey(VK_HOME, recenter);
-            g_hotkeys->AddHotkey(0x54 /* T */, ChordGuarded(recenter));
             // Toggle tracking: End / Ctrl+Shift+Y
             g_hotkeys->SetToggleKey(VK_END, toggleTracking);
             g_hotkeys->AddHotkey(0x59 /* Y */, ChordGuarded(toggleTracking));
