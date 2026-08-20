@@ -16,7 +16,7 @@
 :: if it disagrees with the pushed tag. install.ps1 also reads it (preferring
 :: it over pixi.toml) to stamp .headtracking-state.json, so the line must stay
 :: present and formatted exactly as below.
-set "MOD_VERSION=0.2.0"
+set "MOD_VERSION=0.3.0"
 
 setlocal enabledelayedexpansion
 
