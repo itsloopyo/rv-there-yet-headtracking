@@ -22,7 +22,14 @@ Ride/
     WinGDK/                  <- used by the Game Pass / Xbox build
       dxgi.dll
       HeadTracking.ini
+LICENSE                      <- this mod's licence
+THIRD-PARTY-NOTICES.md       <- licences of everything built into dxgi.dll
+README.md                    <- this file
 ```
+
+Only the `Ride/` tree goes into the game folder. `LICENSE` and
+`THIRD-PARTY-NOTICES.md` are the attribution that has to travel with the
+binary; keep them with the download.
 
 ## Where to extract
 
@@ -126,3 +133,22 @@ keep one.
 For configuration, OpenTrack setup, and troubleshooting, see the full
 README in the project's GitHub repo:
 https://github.com/itsloopyo/rv-there-yet-headtracking
+
+## Licence and credits
+
+This mod is MIT licensed, copyright itsloopyo / CameraUnlock - see
+`LICENSE`. `dxgi.dll` also has third-party code compiled into it:
+
+- [MinHook](https://github.com/TsudaKageyu/minhook) (BSD-2-Clause), which
+  itself carries the Hacker Disassembler Engine notice.
+- [cameraunlock-core](https://github.com/itsloopyo/cameraunlock-core) (MIT),
+  our shared head-tracking pipeline.
+
+Both licences are reproduced in full in `THIRD-PARTY-NOTICES.md`.
+
+The [OpenTrack](https://github.com/opentrack/opentrack) contributors are
+credited for the UDP pose protocol this mod speaks; no OpenTrack code is
+included. RV There Yet? is developed and published by Nuggets Entertainment
+AB, who are credited for the game. This is an unofficial, fan-made mod, is
+not affiliated with or endorsed by them, ships no game code or assets, and
+needs a legitimately purchased copy of the game.

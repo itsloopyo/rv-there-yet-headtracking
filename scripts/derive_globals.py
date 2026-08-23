@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
-"""Relocate GUObjectArray.ObjObjects and FNamePool for a patched SN2 EXE.
+"""Relocate GUObjectArray.ObjObjects and FNamePool for a patched EXE.
 
 Locates the FUObjectArray allocator and the FName decoder by masked byte
-signatures (taken from the old build's relocation-free prologue bytes), then
-capstone-decodes each to read the rip-relative global it references:
+signatures, then capstone-decodes each to read the rip-relative global it
+references:
 
-  ObjObjects : the unique `mov qword [rip+x], rax` in the allocator
-               (old build: fn+0x18e, target 0x0cd16500).
-  FNamePool  : the first `lea r8, [rip+x]` in the decoder
-               (old build: fn+0x18, target 0x0cc32300); cross-checked
+  ObjObjects : the unique `mov qword [rip+x], rax` in the allocator.
+  FNamePool  : the first `lea r8, [rip+x]` in the decoder, cross-checked
                against `cmp byte [rip+y], 0` where pool == y + 0x267.
+
+The signatures are prologue bytes of the game's own code, so they are not
+committed: sigfile reads them from scratch/signatures.json, which you generate
+locally from your own install (see scripts/sigfile.py).
 
 Usage: py -3 derive_globals.py <path-to-exe>
 """
@@ -19,6 +21,8 @@ import struct
 import pefile
 from capstone import Cs, CS_ARCH_X86, CS_MODE_64
 from capstone.x86 import X86_OP_MEM, X86_REG_RIP
+
+import sigfile
 
 EXE = sys.argv[1]
 pe = pefile.PE(EXE, fast_load=True)
@@ -45,13 +49,8 @@ def masked_scan(sig):
         start = i + 1
     return hits
 
-def h(s):
-    return [None if x == "??" else int(x, 16) for x in s.split()]
-
-ALLOC_SIG = h("48 89 5c 24 20 55 56 57 48 83 ec 50 48 8d 15 ?? ?? ?? ?? "
-              "48 8d 4c 24 30 e8 ?? ?? ?? ?? 33 db c7 84 24 80 00 00 00 00 00 20 00")
-DECODER_SIG = h("48 89 5c 24 10 57 48 83 ec 20 80 3d ?? ?? ?? ?? 00 48 8b fa "
-                "8b 19 74 09 4c 8d 05 ?? ?? ?? ?? eb 16")
+ALLOC_SIG = sigfile.load("fuobjectarray_allocator")
+DECODER_SIG = sigfile.load("fname_decoder")
 
 def disasm(fn_rva, length=0x300):
     code = D[fn_rva - TVA: fn_rva - TVA + length]

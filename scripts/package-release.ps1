@@ -52,9 +52,16 @@ if (-not (Test-Path $manifest)) {
 }
 Copy-Item $manifest -Destination $staging
 
+# The installer ZIP is a binary distribution: MinHook's BSD-2-Clause and the
+# MIT of cameraunlock-core both require their notices to travel with the
+# payload, so a missing notice file fails the build rather than shipping a
+# ZIP that quietly drops an attribution.
 foreach ($doc in "README.md","LICENSE","CHANGELOG.md","THIRD-PARTY-NOTICES.md") {
     $p = Join-Path $projectDir $doc
-    if (Test-Path $p) { Copy-Item $p -Destination $staging }
+    if (-not (Test-Path $p)) {
+        throw "Required document not found: $doc. Every published ZIP is a binary distribution and must carry it."
+    }
+    Copy-Item $p -Destination $staging
 }
 
 $installerZip = Join-Path $releaseDir "RVThereYetHeadTracking-v$version-installer.zip"
@@ -74,8 +81,25 @@ foreach ($subdir in "Ride\Binaries\Win64", "Ride\Binaries\WinGDK") {
     Copy-Item $dxgiProxy -Destination $deployDir
     if (Test-Path $ini) { Copy-Item $ini -Destination $deployDir }
 }
-$nexusReadme = Join-Path $projectDir "scripts/nexus-readme.md"
-if (Test-Path $nexusReadme) { Copy-Item $nexusReadme -Destination (Join-Path $nexusStaging "README.md") }
 $nexusZip = Join-Path $releaseDir "RVThereYetHeadTracking-v$version-nexus.zip"
+# The Nexus ZIP is a binary distribution too: the licences of everything
+# compiled into or bundled with the payload require their notices to travel
+# with it, so LICENSE and THIRD-PARTY-NOTICES.md ship at its root.
+foreach ($noticeDoc in @('LICENSE', 'THIRD-PARTY-NOTICES.md')) {
+    $noticeSrc = Join-Path $projectDir $noticeDoc
+    if (-not (Test-Path $noticeSrc)) {
+        throw "Required notice file not found: $noticeDoc. Every published ZIP is a binary distribution and must carry it."
+    }
+    Copy-Item $noticeSrc -Destination $nexusStaging -Force
+    Write-Host "  $noticeDoc" -ForegroundColor Green
+}
+
+# Nexus users extract into the game folder, so they get the Nexus README, not
+# the installer one. Copied last: the notice loop above must not overwrite it.
+$nexusReadme = Join-Path $projectDir "scripts/nexus-readme.md"
+if (-not (Test-Path $nexusReadme)) {
+    throw "scripts/nexus-readme.md not found. The Nexus ZIP must ship its own README."
+}
+Copy-Item $nexusReadme -Destination (Join-Path $nexusStaging "README.md") -Force
 Compress-Archive -Path (Join-Path $nexusStaging "*") -DestinationPath $nexusZip -Force
 Write-Host "Wrote $nexusZip" -ForegroundColor Green

@@ -61,10 +61,13 @@ if(MSVC)
 endif()
 
 include(FetchContent)
+# Pinned to the commit, not the tag: a tag can be repointed upstream, and the
+# version this build claims in THIRD-PARTY-NOTICES.md has to be the version it
+# actually compiles. 9fbd087 is release v1.3.3, dated 2017-01-07.
 FetchContent_Declare(
     minhook_src
     GIT_REPOSITORY https://github.com/TsudaKageyu/minhook.git
-    GIT_TAG        v1.3.3
+    GIT_TAG        9fbd087432700d73fc571118d6a9697a36443d88
 )
 FetchContent_MakeAvailable(minhook_src)
 

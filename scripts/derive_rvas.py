@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic SN2 RVA derivation - no Ghidra, no full analysis.
+"""Deterministic RVA derivation - no Ghidra, no full analysis.
 
 Repeated full Ghidra analyses of the 225MB UE5 binary proved flaky (2G OOM,
 non-persisting reference/string analysis), so this derives the load-bearing
@@ -26,6 +26,8 @@ import bisect
 
 import pefile
 from capstone import Cs, CS_ARCH_X86, CS_MODE_64
+
+import sigfile
 
 EXE = sys.argv[1]
 
@@ -132,14 +134,6 @@ def find_lea_targets_to(target_rva):
         i += 1
     return hits
 
-# GPV's first 32 relocation-free prologue bytes (frame setup + `mov edx,0x142`),
-# captured from steam-win64-20260522/20260601. The verbose checkf string that
-# used to anchor GPV is stripped in newer builds, so the prologue signature is
-# the primary anchor. If a future patch reshapes the prologue, re-dump it from
-# the prior known-good Ghidra project via scripts/ghidra/dump_old_signatures.py.
-GPV_PROLOGUE_SIG = bytes.fromhex(
-    "48895c24105556415648" "8d6c24b94881ec90000000" "488bf2488bd9ba42010000")
-
 def scan_text_sig(sig):
     hits = []
     start = 0
@@ -166,8 +160,11 @@ def derive_gpv():
                 funcs.setdefault(fc[0], []).append(l)
         if funcs:
             return srva, funcs
-    # Fallback: prologue signature (the string is stripped in newer builds).
-    hits = scan_text_sig(GPV_PROLOGUE_SIG)
+    # Fallback: GPV's relocation-free prologue bytes, for builds where the
+    # checkf string has been stripped. Those bytes are the game's own code and
+    # are not committed, so they load from the local signature file that
+    # scripts/ghidra/dump_old_signatures.py writes off a known-good project.
+    hits = scan_text_sig(sigfile.load_exact("gpv_prologue"))
     if len(hits) == 1:
         return None, {hits[0]: ["prologue-sig"]}
     if len(hits) > 1:

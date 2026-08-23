@@ -1,37 +1,46 @@
-# Dump raw bytes at the OLD build's known-good RVAs so we can build masked
-# byte-signatures and relocate the same functions in a patched EXE without
-# relying on Ghidra full analysis of the new binary. Run against the OLD,
-# fully-analyzed project (C:\temp\subnautica-2 / Subnautica2).
-OUT  = r"C:\tmp\sub2_old_signatures.txt"
+# Dump prologue bytes at known-good RVAs from a fully analyzed Ghidra project
+# and write them as the signature file scripts/sigfile.py reads, so a patched
+# EXE can be relocated without re-analyzing 225MB of UE5 binary.
+#
+# The bytes are the game's own machine code. Keep the output under scratch/
+# (gitignored) - it must never be committed.
+#
+# Run against the OLD, fully analyzed project, passing an output path and one
+# <name>:<rva>:<length> target per signature:
+#
+#   analyzeHeadless C:\temp <Project> -process <exe> -noanalysis \
+#     -postScript dump_old_signatures.py \
+#       ..\scratch\signatures.json gpv_prologue:<rva>:32
+#
+# Bytes come out literal. Hand-edit each relocated displacement to "??" before
+# using the file across builds, or the scan only matches the build it came from.
+import json
+
 BASE = 0x140000000
 
-mem  = currentProgram.getMemory()
+args = getScriptArgs()
+if len(args) < 2:
+    raise Exception("usage: dump_old_signatures.py <out.json> <name>:<rva>:<len> ...")
+
+out_path = args[0]
+mem = currentProgram.getMemory()
 fact = currentProgram.getAddressFactory()
 
-def addr(v): return fact.getDefaultAddressSpace().getAddress(v)
 
 def dump(rva, n):
-    a = addr(BASE + rva)
+    a = fact.getDefaultAddressSpace().getAddress(BASE + rva)
     out = []
     for i in range(n):
-        try:
-            out.append(mem.getByte(a.add(i)) & 0xFF)
-        except:
-            out.append(-1)
+        out.append(mem.getByte(a.add(i)) & 0xFF)
     return out
 
-# Known-good old (2026-05-22 Steam) RVAs from steam_offsets.cpp.
-TARGETS = [
-    ("GPV",            0x043ed6f0, 96),
-    ("render_caller",  0x041718b0, 64),   # containing fn of retRVA 0x04171af7
-    ("ObjObjects_fn",  0x016ed040, 48),   # allocator (per NOTES) - may differ
-    ("FNamePool_decoder", 0x0147d030, 64),
-]
 
-with open(OUT, "w") as f:
-    for name, rva, n in TARGETS:
-        bs = dump(rva, n)
-        f.write("%s @ RVA 0x%08x (%d bytes)\n" % (name, rva, n))
-        f.write("  " + " ".join(("%02x" % b) if b >= 0 else "??" for b in bs) + "\n\n")
+sigs = {}
+for spec in args[1:]:
+    name, rva, length = spec.split(":")
+    sigs[name] = " ".join("%02x" % b for b in dump(int(rva, 0), int(length, 0)))
 
-print("Wrote %s" % OUT)
+with open(out_path, "w") as f:
+    json.dump(sigs, f, indent=2, sort_keys=True)
+
+print("Wrote %s (%d signature(s))" % (out_path, len(sigs)))
