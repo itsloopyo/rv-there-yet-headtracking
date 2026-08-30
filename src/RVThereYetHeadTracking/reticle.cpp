@@ -12,6 +12,7 @@
 
 #include "builds/build_registry.h"
 
+#include "cameraunlock/rendering/aim_quat_projection.h"
 #include "cameraunlock/unreal/ue_runtime.h"
 
 namespace RVThereYetHeadTracking::reticle
@@ -25,8 +26,6 @@ namespace RVThereYetHeadTracking::reticle
         using ue::QuatInv;
         using ue::QuatMul;
         using ue::QuatRotateVec;
-
-        constexpr double kPi = 3.14159265358979323846;
 
         // Rate limits for the aim-offset diagnostic on the hot path. It answers
         // a calibration question (does the projected offset match the widget
@@ -96,13 +95,42 @@ namespace RVThereYetHeadTracking::reticle
         std::vector<ReticleTarget> g_targets;
         std::uint64_t g_lastTargetScan = 0;
 
-        // A cached target goes stale when its widget is freed/recreated - the
-        // class pointer at +kClassPrivate no longer matches what we recorded.
+        // Is the object still in the global UObject array at the slot its own
+        // InternalIndex names? A freed UObject leaves its memory readable and
+        // its ClassPrivate intact for as long as the allocator holds the block,
+        // so the class-pointer test on its own reports dead widgets as live.
+        bool RegisteredInObjectArray(std::uintptr_t obj)
+        {
+            const auto& g = Offsets().UObjectGlobals;
+            if (g.kChunkNumElems == 0 || g.kFUObjectItemSize == 0) return false;
+            // UObjectBase packs InternalIndex immediately before ClassPrivate.
+            std::uint32_t index = 0;
+            if (!ue::SafeReadU32(obj + g.kClassPrivate - 4, index)) return false;
+
+            const std::uintptr_t objArr = ue::ModuleBase() + g.kObjObjects;
+            std::uintptr_t chunks = 0;
+            std::uint32_t num = 0;
+            if (!ue::SafeReadPtr(objArr, chunks) || !chunks) return false;
+            if (!ue::SafeReadU32(objArr + g.kObjObjects_Num, num) || index >= num) return false;
+
+            std::uintptr_t chunk = 0;
+            if (!ue::SafeReadPtr(chunks + (static_cast<std::uintptr_t>(index / g.kChunkNumElems) * 8),
+                                 chunk) || !chunk)
+                return false;
+            std::uintptr_t registered = 0;
+            return ue::SafeReadPtr(chunk + static_cast<std::uintptr_t>(index % g.kChunkNumElems)
+                                       * g.kFUObjectItemSize, registered)
+                && registered == obj;
+        }
+
+        // A cached target goes stale when its widget is freed/recreated.
         bool ReticleTargetLive(const ReticleTarget& t)
         {
             std::uintptr_t cls = 0;
-            return ue::SafeReadPtr(t.obj + Offsets().UObjectGlobals.kClassPrivate, cls)
-                && cls == t.cls;
+            if (!ue::SafeReadPtr(t.obj + Offsets().UObjectGlobals.kClassPrivate, cls)
+                || cls != t.cls)
+                return false;
+            return RegisteredInObjectArray(t.obj);
         }
 
         std::atomic<bool> g_show{true};
@@ -113,7 +141,6 @@ namespace RVThereYetHeadTracking::reticle
         bool g_wasOffset = false;
         std::atomic<bool> g_testNudge{false};  // Ctrl+Shift+J: force +300px to verify plumbing
         float g_scale = 1.0f;   // common (both axes); F7/F8
-        float g_vScale = 1.0f;  // extra vertical multiplier (HUD layout anisotropy); F9/F10
 
         // Resolve UObject::ProcessEvent off a UWidget's vtable (slot 76). Must
         // be a widget, not an actor - AActor overrides the slot with a net-aware
@@ -136,12 +163,25 @@ namespace RVThereYetHeadTracking::reticle
             }
         }
 
+        // The script VM is reached with an address pair derived from the running
+        // game, so a wrong build profile or a widget torn down between the
+        // liveness test and the call faults here. Reported once: it repeats
+        // every frame and the first occurrence is the one that names the cause.
+        bool g_processEventFaultLogged = false;
+
         bool SafeProcessEvent(void* self, void* fn, void* params)
         {
+            unsigned long code = 0;
             __try {
                 g_processEvent(self, fn, params);
                 return true;
-            } __except (EXCEPTION_EXECUTE_HANDLER) {
+            } __except (code = GetExceptionCode(), EXCEPTION_EXECUTE_HANDLER) {
+                if (!g_processEventFaultLogged) {
+                    g_processEventFaultLogged = true;
+                    Log::Line("ProcessEvent faulted (code 0x%08lx) calling fn=%p on obj=%p - "
+                        "reticle moves for this widget are being dropped",
+                        code, fn, self);
+                }
                 return false;
             }
         }
@@ -461,33 +501,35 @@ namespace RVThereYetHeadTracking::reticle
         }
 
         // Project the clean-aim point into the head-tracked view as a pixel
-        // offset from screen centre. Rather than per-axis tan() (which only
-        // holds for camera-local yaw), transform the clean-aim world direction
-        // into the tracked view's local frame via qrel = viewQ^-1 * baseQ and
-        // perspective-divide. This is correct for BOTH yaw modes: in world-yaw
-        // mode head yaw rotates about world up, so its screen effect depends on
-        // the camera's base orientation - which viewQ captures. Reduces exactly
-        // to the local per-axis formula when viewQ = baseQ * headLocal.
-        // UE frame: +X forward, +Y right, +Z up. Screen Y is down, hence the
-        // negation on dy. Returns false if inputs are degenerate / aim behind.
+        // offset from screen centre. The relative rotation qrel = viewQ^-1 *
+        // baseQ carries the clean-aim direction into the tracked view's frame,
+        // which is correct for BOTH yaw modes: in world-yaw mode head yaw
+        // rotates about world up, so its screen effect depends on the camera's
+        // base orientation, and viewQ captures that.
+        //
+        // Hor+ (MaintainYFOV) aspect scaling and the viewport-edge NDC clamp
+        // live in cameraunlock-core. The clamp is what this used to be missing:
+        // as the clean aim approaches 90 degrees off-axis the perspective
+        // divide runs away and the widget was thrown thousands of pixels
+        // off-screen instead of stopping at the edge.
         bool ComputeAimScreenOffset(const FQuat4d& baseQ, const FQuat4d& viewQ,
                                     double fovDeg, double& dx, double& dy)
         {
             double vw = 0.0, vh = 0.0;
             if (!GetViewportSize(vw, vh)) return false;
             if (fovDeg < 20.0 || fovDeg > 170.0) return false;
-            const double halfTanH = std::tan(fovDeg * 0.5 * kPi / 180.0);
-            if (halfTanH < 1e-4) return false;
 
             const FQuat4d qrel = QuatMul(QuatInv(viewQ), baseQ);
-            const FVector aim = QuatRotateVec(qrel, FVector{ 1.0, 0.0, 0.0 });
-            if (aim.X < 1e-3) return false;  // clean aim is behind the tracked view
+            const auto proj = cameraunlock::rendering::ProjectAimQuatHorPlus(
+                qrel.X, qrel.Y, qrel.Z, qrel.W,
+                static_cast<float>(vw), static_cast<float>(vh),
+                static_cast<float>(fovDeg));
+            if (!proj.inFront) return false;
 
-            // Screen-pixel focal length. The slate/DPI conversion is handled by
-            // dividing out the widget geometry scale in DriveReticle.
-            const double k = (vw * 0.5) / halfTanH * static_cast<double>(g_scale);
-            dx =  k * (aim.Y / aim.X);
-            dy = -k * (aim.Z / aim.X) * static_cast<double>(g_vScale);
+            // The slate/DPI conversion is handled by dividing out the widget
+            // geometry scale in DriveReticle.
+            dx = (static_cast<double>(proj.screenX) - vw * 0.5) * static_cast<double>(g_scale);
+            dy = (static_cast<double>(proj.screenY) - vh * 0.5) * static_cast<double>(g_scale);
 
             static std::uint64_t s_lastLog = 0;
             static int s_logCount = 0;
@@ -497,8 +539,8 @@ namespace RVThereYetHeadTracking::reticle
             if (now - s_lastLog >= interval) {
                 s_lastLog = now;
                 ++s_logCount;
-                Log::Line("aim-offset: vw=%.0f fov=%.1f scale=%.2f vscale=%.2f aim=(%.3f,%.3f,%.3f) -> dx=%.1f dy=%.1f",
-                    vw, fovDeg, g_scale, g_vScale, aim.X, aim.Y, aim.Z, dx, dy);
+                Log::Line("aim-offset: vw=%.0f vh=%.0f fov=%.1f scale=%.2f ndc=(%.3f,%.3f) -> dx=%.1f dy=%.1f",
+                    vw, vh, fovDeg, g_scale, proj.ndcX, proj.ndcY, dx, dy);
             }
             return true;
         }
@@ -508,7 +550,6 @@ namespace RVThereYetHeadTracking::reticle
     {
         g_show.store(s.show);
         g_scale = s.scale;
-        g_vScale = s.verticalScale;
         if (!s.targetNames.empty()) g_targetNames = s.targetNames;
     }
 
@@ -560,11 +601,5 @@ namespace RVThereYetHeadTracking::reticle
     {
         g_scale = std::clamp(g_scale + delta, 0.1f, 5.0f);
         Log::Line("reticle scale -> %.2f (save to [Reticle] Scale)", g_scale);
-    }
-
-    void AdjustVerticalScale(float delta)
-    {
-        g_vScale = std::clamp(g_vScale + delta, 0.1f, 5.0f);
-        Log::Line("reticle vertical-scale -> %.2f (save to [Reticle] VerticalScale)", g_vScale);
     }
 }

@@ -1,6 +1,7 @@
 #include "headtracking_mod.h"
 #include "logging.h"
 #include "reticle.h"
+#include "position_boundary.h"
 
 #include <atomic>
 #include <cmath>
@@ -28,6 +29,7 @@
 #include "cameraunlock/math/smoothing_utils.h"
 #include "cameraunlock/math/quat4.h"
 #include "cameraunlock/time/frame_clock.h"
+#include "cameraunlock/time/qpc_clock.h"
 #include "cameraunlock/unreal/ue_math.h"
 #include "cameraunlock/unreal/ue_runtime.h"
 
@@ -61,6 +63,7 @@ namespace RVThereYetHeadTracking
         using ue::QuatToRotator;
         using ue::QuatRotateVec;
         using cameraunlock::input::ChordGuarded;
+        using cameraunlock::input::NavGuarded;
         using cameraunlock::time::FrameClock;
 
         // ---- Runtime state ----
@@ -112,23 +115,6 @@ namespace RVThereYetHeadTracking
         cameraunlock::PositionProcessor   g_posProcessor;
         cameraunlock::PositionInterpolator g_posInterp;
         FrameClock g_posClock;
-
-        // High-resolution timer for sub-frame frame-boundary detection.
-        std::uint64_t QpcNow()
-        {
-            LARGE_INTEGER v;
-            QueryPerformanceCounter(&v);
-            return static_cast<std::uint64_t>(v.QuadPart);
-        }
-        std::uint64_t QpcFreq()
-        {
-            static const std::uint64_t f = [] {
-                LARGE_INTEGER v;
-                QueryPerformanceFrequency(&v);
-                return static_cast<std::uint64_t>(v.QuadPart);
-            }();
-            return f;
-        }
 
         // Re-selects local vs remote smoothing when the tracker source changes.
         // Called every frame, before the pipeline runs.
@@ -211,10 +197,7 @@ namespace RVThereYetHeadTracking
             // y=heave(up), z=surge(forward).
             const cameraunlock::math::Vec3 off = g_posProcessor.Process(interp, headQ, dt);
 
-            constexpr double kMetersToUE = 100.0;
-            surge = static_cast<double>(off.z) * kMetersToUE;  // forward
-            sway  = static_cast<double>(off.x) * kMetersToUE;  // right
-            heave = static_cast<double>(off.y) * kMetersToUE;  // up
+            rvty::position::TrackerOffsetToUE(off, surge, sway, heave);
             return true;
         }
 
@@ -285,15 +268,15 @@ namespace RVThereYetHeadTracking
             // A new frame is detected by a QPC gap larger than the sub-frame
             // inter-view spacing (which is microseconds) but smaller than a
             // frame period.
-            static thread_local std::uint64_t s_lastPoseQpc = 0;
+            static thread_local std::uint64_t s_lastPoseUs = 0;
             static thread_local float  cYaw = 0.0f, cPitch = 0.0f, cRoll = 0.0f;
             static thread_local bool   cRotValid = false;
             static thread_local double cSurge = 0.0, cSway = 0.0, cHeave = 0.0;
             static thread_local bool   cPosValid = false;
 
-            const std::uint64_t qpc = QpcNow();
-            if (qpc - s_lastPoseQpc > QpcFreq() / 2000) {  // > 0.5 ms => new frame
-                s_lastPoseQpc = qpc;
+            const std::uint64_t nowUs = cameraunlock::time::QpcNowMicros();
+            if (nowUs - s_lastPoseUs > 500) {  // > 0.5 ms => new frame
+                s_lastPoseUs = nowUs;
                 float y = 0.0f, p = 0.0f, r = 0.0f;
                 cRotValid = GetProcessedRotation(y, p, r);
                 // Master rotation gate (mode 2 = position only). Zeroed values
@@ -490,6 +473,18 @@ namespace RVThereYetHeadTracking
             return v;
         }
 
+        void WarnRetiredVerticalScaleKey(const cameraunlock::IniReader& ini)
+        {
+            static bool warned = false;
+            if (warned) return;
+            if (ini.ReadString("Reticle", "VerticalScale", "").empty()) return;
+            warned = true;
+            Log::Line("config: key [Reticle] VerticalScale has been retired and is IGNORED. "
+                "It existed to correct a projection that used the wrong vertical term; "
+                "the reticle now projects through the shared Hor+ model and needs no "
+                "per-axis correction. Remove the key.");
+        }
+
         // Warned once per process rather than once per load: config is
         // reloadable, and repeating this on every reload buries it.
         //
@@ -556,16 +551,17 @@ namespace RVThereYetHeadTracking
 
             cameraunlock::PositionSettings ps = g_posProcessor.GetSettings();
             g_positionEnabled.store(ini.ReadBool("Position", "Enabled", true));
-            ps.sensitivity_x = ReadFiniteFloat(ini, "Position", "SensitivityX", 1.0f);
-            ps.sensitivity_y = ReadFiniteFloat(ini, "Position", "SensitivityY", 1.0f);
-            ps.sensitivity_z = ReadFiniteFloat(ini, "Position", "SensitivityZ", 1.0f);
-            ps.invert_x = ini.ReadBool("Position", "InvertX", false);
-            ps.invert_y = ini.ReadBool("Position", "InvertY", false);
-            ps.invert_z = ini.ReadBool("Position", "InvertZ", false);
-            ps.limit_x = ReadFiniteFloat(ini, "Position", "LimitX", 0.30f);
-            ps.limit_y = ReadFiniteFloat(ini, "Position", "LimitY", 0.20f);
-            ps.limit_z = ReadFiniteFloat(ini, "Position", "LimitZ", 0.40f);
-            ps.limit_z_back = ReadFiniteFloat(ini, "Position", "LimitZBack", 0.10f);
+            namespace pd = rvty::position;
+            ps.sensitivity_x = ReadFiniteFloat(ini, "Position", "SensitivityX", pd::kSensitivityX);
+            ps.sensitivity_y = ReadFiniteFloat(ini, "Position", "SensitivityY", pd::kSensitivityY);
+            ps.sensitivity_z = ReadFiniteFloat(ini, "Position", "SensitivityZ", pd::kSensitivityZ);
+            ps.invert_x = ini.ReadBool("Position", "InvertX", pd::kInvertX);
+            ps.invert_y = ini.ReadBool("Position", "InvertY", pd::kInvertY);
+            ps.invert_z = ini.ReadBool("Position", "InvertZ", pd::kInvertZ);
+            ps.limit_x = ReadFiniteFloat(ini, "Position", "LimitX", pd::kLimitX);
+            ps.limit_y = ReadFiniteFloat(ini, "Position", "LimitY", pd::kLimitY);
+            ps.limit_z = ReadFiniteFloat(ini, "Position", "LimitZ", pd::kLimitZ);
+            ps.limit_z_back = ReadFiniteFloat(ini, "Position", "LimitZBack", pd::kLimitZBack);
             // Position shares the [Tracking] smoothing parameters; the connection
             // flag that picks between them lives on the processor.
             ps.local_smoothing = g_localSmoothing;
@@ -575,7 +571,7 @@ namespace RVThereYetHeadTracking
             reticle::Settings rs;
             rs.show = ini.ReadBool("Tracking", "ShowReticle", true);
             rs.scale = ReadFiniteFloat(ini, "Reticle", "Scale", 1.0f);
-            rs.verticalScale = ReadFiniteFloat(ini, "Reticle", "VerticalScale", 1.0f);
+            WarnRetiredVerticalScaleKey(ini);
             // Comma-separated widget names to move to the aim point; empty
             // keeps the built-in defaults.
             const std::string names = ini.ReadString("Reticle", "WidgetNames", "");
@@ -716,13 +712,13 @@ namespace RVThereYetHeadTracking
             };
 
             // Toggle tracking: End / Ctrl+Shift+Y
-            g_hotkeys->SetToggleKey(VK_END, toggleTracking);
+            g_hotkeys->SetToggleKey(VK_END, NavGuarded(toggleTracking));
             g_hotkeys->AddHotkey(0x59 /* Y */, ChordGuarded(toggleTracking));
             // Cycle tracking mode: Page Up / Ctrl+Shift+G
-            g_hotkeys->AddHotkey(VK_PRIOR, cycleTrackingMode);
+            g_hotkeys->AddHotkey(VK_PRIOR, NavGuarded(cycleTrackingMode));
             g_hotkeys->AddHotkey(0x47 /* G */, ChordGuarded(cycleTrackingMode));
             // Yaw mode (world/local): Page Down (or [Hotkeys] ToggleYawMode) / Ctrl+Shift+H
-            g_hotkeys->AddHotkey(yawModeKey, toggleYawMode);
+            g_hotkeys->AddHotkey(yawModeKey, NavGuarded(toggleYawMode));
             g_hotkeys->AddHotkey(0x48 /* H */, ChordGuarded(toggleYawMode));
 #if RVTY_DEV_HOTKEYS
             // Diagnostic widget dump: Ctrl+Shift+U (press near an interaction
@@ -737,9 +733,6 @@ namespace RVThereYetHeadTracking
             // Live reticle-scale tuning: F7 down / F8 up by 0.1.
             g_hotkeys->AddHotkey(VK_F7,  []() { reticle::AdjustScale(-0.1f); });
             g_hotkeys->AddHotkey(VK_F8,  []() { reticle::AdjustScale(+0.1f); });
-            // Vertical-only tuning: F9 down / F10 up.
-            g_hotkeys->AddHotkey(VK_F9,  []() { reticle::AdjustVerticalScale(-0.05f); });
-            g_hotkeys->AddHotkey(VK_F10, []() { reticle::AdjustVerticalScale(+0.05f); });
 #endif
             g_hotkeys->Start();
 

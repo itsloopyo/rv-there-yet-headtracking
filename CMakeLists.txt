@@ -125,3 +125,18 @@ set_target_properties(${MOD_NAME} PROPERTIES
     SUFFIX ".dll"
     OUTPUT_NAME "dxgi"
 )
+
+# Behaviour lock for the lean boundary and for the shipped INI agreeing with
+# the code defaults. A separate executable linking none of the hook machinery,
+# so `pixi run test` runs anywhere the mod builds, with no game installed.
+option(RVTY_BUILD_TESTS "Build the position behaviour tests" ON)
+if(RVTY_BUILD_TESTS)
+    add_executable(rvty_position_tests tests/position_tests.cpp)
+    target_include_directories(rvty_position_tests PRIVATE
+        src/RVThereYetHeadTracking
+        cameraunlock-core/cpp/include
+    )
+    target_compile_definitions(rvty_position_tests PRIVATE
+        RVTY_SHIPPED_INI="${CMAKE_CURRENT_SOURCE_DIR}/HeadTracking.ini"
+    )
+endif()

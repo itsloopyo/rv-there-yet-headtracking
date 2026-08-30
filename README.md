@@ -195,7 +195,6 @@ WorldSpaceYaw = true
 
 [Reticle]
 Scale = 1.0            ; reticle follow strength (1.0 = geometric aim point)
-VerticalScale = 1.0    ; extra vertical-only multiplier for the reticle follow
 ; UMG widgets moved to the aim point; blank = built-in defaults
 ; (Crosshair, LookAtObjectName). Leave the value empty, with nothing after
 ; the "=" - any text there, comment included, is taken as a widget name.
@@ -207,18 +206,17 @@ Enabled = true
 SensitivityX = 1.0
 SensitivityY = 1.0
 SensitivityZ = 1.0
-; sideways lean direction (inverted for this game)
-InvertX = true
-; vertical move direction
+; flip a lean direction that feels reversed; the mod already orients every
+; axis for this game, so all three are off
+InvertX = false
 InvertY = false
-; forward/back lean direction (inverted for this game)
-InvertZ = true
+InvertZ = false
 LimitX = 0.30          ; max sideways lean in meters
 LimitY = 0.20          ; max vertical move in meters
-; Z is inverted for this game, so the generous forward range lives on
-; LimitZBack and the restricted backward range on LimitZ.
-LimitZ = 0.10
-LimitZBack = 0.40
+; forward gets the generous allowance; leaning back is restricted so the view
+; does not clip through the seat and player
+LimitZ = 0.40
+LimitZBack = 0.10
 ; Position uses the [Tracking] LocalSmoothing / RemoteSmoothing values.
 
 [Hotkeys]

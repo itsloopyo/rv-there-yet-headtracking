@@ -16,7 +16,6 @@ namespace RVThereYetHeadTracking::reticle
     {
         bool  show = true;
         float scale = 1.0f;
-        float verticalScale = 1.0f;
         // Widget names to move to the aim point; empty keeps the built-in
         // defaults (Crosshair, LookAtObjectName).
         std::vector<std::string> targetNames;
@@ -45,5 +44,4 @@ namespace RVThereYetHeadTracking::reticle
     // Live-tuning entry points, hotkey-bound only when RVTY_DEV_HOTKEYS=1.
     void ToggleTestNudge();
     void AdjustScale(float delta);
-    void AdjustVerticalScale(float delta);
 }
