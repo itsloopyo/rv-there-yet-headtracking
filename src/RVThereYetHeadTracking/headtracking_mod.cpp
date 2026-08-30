@@ -559,7 +559,12 @@ namespace RVThereYetHeadTracking
             ps.invert_y = ini.ReadBool("Position", "InvertY", pd::kInvertY);
             ps.invert_z = ini.ReadBool("Position", "InvertZ", pd::kInvertZ);
             ps.limit_x = ReadFiniteFloat(ini, "Position", "LimitX", pd::kLimitX);
+            // The clamp is [-limit_y_down, +limit_y] and limit_y_down carries its own
+            // default, so mirror the one configured vertical limit the way
+            // PositionSettings::Symmetric does. Left unset, raising LimitY widened the
+            // upward budget only and downward travel stayed pinned at 0.20m.
             ps.limit_y = ReadFiniteFloat(ini, "Position", "LimitY", pd::kLimitY);
+            ps.limit_y_down = ps.limit_y;
             ps.limit_z = ReadFiniteFloat(ini, "Position", "LimitZ", pd::kLimitZ);
             ps.limit_z_back = ReadFiniteFloat(ini, "Position", "LimitZBack", pd::kLimitZBack);
             // Position shares the [Tracking] smoothing parameters; the connection
