@@ -241,8 +241,10 @@ Enabled = true
 SensitivityX = 1.0
 SensitivityY = 1.0
 SensitivityZ = 1.0
-; flip a lean direction that feels reversed; the mod already orients every
-; axis for this game, so all three are off
+; correct a tracker whose axis runs opposite to this one; InvertZ is applied
+; before the travel clamp, so turning it on swaps which of LimitZ and
+; LimitZBack the forward lean is measured against; the mod already orients
+; every axis for this game, so all three are off
 InvertX = false
 InvertY = false
 InvertZ = false

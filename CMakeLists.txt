@@ -108,6 +108,15 @@ target_compile_definitions(${MOD_NAME} PRIVATE
     RVTY_GIT_SHA="${RVTY_GIT_SHA}"
 )
 
+option(RVTY_DEV_HOTKEYS "Build the reticle/widget diagnostic hotkeys (developer aid, not for release)" OFF)
+if(RVTY_DEV_HOTKEYS)
+    target_compile_definitions(${MOD_NAME} PRIVATE RVTY_DEV_HOTKEYS=1)
+    message(WARNING "RVTY_DEV_HOTKEYS is ON. This build registers F7/F8 to shift "
+                    "the reticle scale by 0.1, Ctrl+Shift+J to toggle a fixed +300px "
+                    "test nudge on the target widget, and Ctrl+Shift+U to dump live "
+                    "widget names to the log. Do not ship it.")
+endif()
+
 if(MSVC)
     target_compile_options(${MOD_NAME} PRIVATE /W4 /WX /wd4324)
 endif()
