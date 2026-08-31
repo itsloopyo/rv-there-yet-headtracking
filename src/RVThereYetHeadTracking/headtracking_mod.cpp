@@ -102,8 +102,8 @@ namespace RVThereYetHeadTracking
         // Smoothing is chosen per connection: local for a tracker on this
         // machine (loopback), remote for a device on the network. Both cover
         // rotation and position.
-        float g_localSmoothing = 0.0f;
-        float g_remoteSmoothing = 0.15f;
+        float g_localSmoothing = static_cast<float>(cameraunlock::math::kDefaultLocalSmoothing);
+        float g_remoteSmoothing = static_cast<float>(cameraunlock::math::kDefaultRemoteSmoothing);
         bool  g_isRemoteConnection = false;
         // Tri-state: false/false is indistinguishable from a local tracker, so
         // a plain equality check never reports the (common) local case at all.
@@ -542,8 +542,10 @@ namespace RVThereYetHeadTracking
             g_invertYaw   = ini.ReadBool("Tracking", "InvertYaw", false);
             g_invertPitch = ini.ReadBool("Tracking", "InvertPitch", false);
             g_invertRoll  = ini.ReadBool("Tracking", "InvertRoll", false);
-            g_localSmoothing  = ReadFiniteFloat(ini, "Tracking", "LocalSmoothing", 0.0f);
-            g_remoteSmoothing = ReadFiniteFloat(ini, "Tracking", "RemoteSmoothing", 0.15f);
+            g_localSmoothing  = ReadFiniteFloat(ini, "Tracking", "LocalSmoothing",
+                static_cast<float>(cameraunlock::math::kDefaultLocalSmoothing));
+            g_remoteSmoothing = ReadFiniteFloat(ini, "Tracking", "RemoteSmoothing",
+                static_cast<float>(cameraunlock::math::kDefaultRemoteSmoothing));
             WarnRetiredSmoothingKey(ini, "Tracking", "Smoothing");
             WarnRetiredSmoothingKey(ini, "Position", "Smoothing");
             g_worldSpaceYaw.store(ini.ReadBool("Tracking", "WorldSpaceYaw", true));
