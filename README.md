@@ -9,6 +9,7 @@ An unofficial head tracking mod for RV There Yet? that moves the view with your 
 - **Decoupled look and aim** - your head moves the camera while the mouse or
   controller keeps controlling aim, so the game still acts on where you point.
 - **6DOF position tracking** - lean and peek by moving your head in space.
+- **Works with any OpenTrack compatible tracker** - free options available for PC, iOS and Android
 
 ## Requirements
 
@@ -20,6 +21,13 @@ An unofficial head tracking mod for RV There Yet? that moves the view with your 
 - Windows 10 or 11, 64-bit.
 
 ## Installation
+
+### Lopari
+
+Download [Lopari](https://lopari.app), choose **RV There Yet?**, and click
+**Play with head tracking**.
+
+### Standalone Installer
 
 1. Download `RVThereYetHeadTracking-vX.Y.Z-installer.zip` from the
    [Releases page](https://github.com/itsloopyo/rv-there-yet-headtracking/releases).
@@ -45,7 +53,8 @@ or set the `RV_THERE_YET_PATH` environment variable to your install root.
 ### Game Pass / Xbox App Notes
 
 The Xbox app install is more locked down than the Steam install. Use the game's
-`Content` folder as the root, normally:
+`Content` folder as the root. It sits in the `XboxGames` folder on whichever
+drive you let the Xbox app install to, so on a C: library that is:
 
 ```cmd
 C:\XboxGames\RV There Yet\Content
@@ -74,7 +83,7 @@ folder for whichever build you have:
 | Store     | Target folder |
 |-----------|---------------|
 | Steam     | `<steam>\steamapps\common\Ride\Ride\Binaries\Win64\` |
-| Game Pass | `C:\XboxGames\RV There Yet\Content\Ride\Binaries\WinGDK\` |
+| Game Pass | `<XboxGames>\RV There Yet\Content\Ride\Binaries\WinGDK\` |
 
 You need three files in that folder:
 
