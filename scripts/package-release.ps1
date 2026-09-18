@@ -43,13 +43,17 @@ Copy-SharedBundle -StagingDir $staging -NoRefresh
 
 # Launcher manifest: the contract Lopari ingests. The launcher reads exactly
 # this filename (deploy/manifest.rs: MANIFEST_FILE = "launcher-manifest.json")
-# from the installer ZIP root. delivery_mode is "install_cmd", so the launcher
-# shells out to install.cmd, which detects the store (Win64 or WinGDK) and
-# deploys to whichever build(s) are present.
+# from the installer ZIP root. delivery_mode is "manifest": the launcher deploys
+# files[] itself, anchored to the exe directory of the install it detected
+# (Win64 on Steam, WinGDK on Game Pass). install.cmd still ships for standalone
+# installs and for the launcher to remove an older script install on upgrade.
 $manifest = Join-Path $projectDir "launcher-manifest.json"
 if (-not (Test-Path $manifest)) {
     throw "launcher-manifest.json not found at project root. The launcher manifest must ship in the installer ZIP."
 }
+# loader.seed carries a base64 copy of HeadTracking.ini, and it is the config a
+# launcher-deployed user gets, so it must not drift from the file install.cmd seeds.
+Assert-ManifestSeedsMatchShipped -ManifestPath $manifest -ProjectRoot $projectDir
 Copy-Item $manifest -Destination $staging
 
 # The installer ZIP is a binary distribution: MinHook's BSD-2-Clause and the

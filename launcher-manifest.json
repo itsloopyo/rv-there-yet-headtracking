@@ -6,10 +6,16 @@
     "game_id": "rv-there-yet"
   },
   "strategy": "Shim",
-  "delivery_mode": "install_cmd",
+  "delivery_mode": "manifest",
+
+  "loader": {
+    "seed": [
+      { "target": "HeadTracking.ini", "anchor": "exe_dir", "content_b64": "OyBSViBUaGVyZSBZZXQgSGVhZCBUcmFja2luZyAtIGNvbmZpZ3VyYXRpb24KCltOZXR3b3JrXQpQb3J0ID0gNDI0MgoKW1RyYWNraW5nXQpFbmFibGVPblN0YXJ0dXAgPSB0cnVlCllhd1NlbnNpdGl2aXR5ID0gMS4wClBpdGNoU2Vuc2l0aXZpdHkgPSAxLjAKUm9sbFNlbnNpdGl2aXR5ID0gMS4wCkludmVydFlhdyA9IGZhbHNlCkludmVydFBpdGNoID0gZmFsc2UKSW52ZXJ0Um9sbCA9IGZhbHNlCjsgMC4wIC0gMS4wLiBIaWdoZXIgPSBzdGVhZGllciBidXQgbGFnZ2llciB2aWV3LiBTbW9vdGhpbmcgaXMgcGlja2VkIHBlcgo7IGNvbm5lY3Rpb24gZnJvbSB0aGUgdHJhY2tlcidzIHNvdXJjZSBhZGRyZXNzIGFuZCBjb3ZlcnMgcm90YXRpb24gYW5kIHBvc2l0aW9uLgo7IExvY2FsU21vb3RoaW5nIGFwcGxpZXMgd2hlbiB0aGUgdHJhY2tlciBydW5zIG9uIHRoaXMgbWFjaGluZSAobG9vcGJhY2spLgpMb2NhbFNtb290aGluZyA9IDAuMAo7IFJlbW90ZVNtb290aGluZyBhcHBsaWVzIHdoZW4gdGhlIHRyYWNrZXIgaXMgYSByZW1vdGUgZGV2aWNlIG9uIHRoZSBuZXR3b3JrCjsgKGVnIGEgcGhvbmUgYXBwIG92ZXIgV2lGaSwgd2hlcmUgYSBsaXR0bGUgc21vb3RoaW5nIHBheXMgZm9yIGl0c2VsZikuClJlbW90ZVNtb290aGluZyA9IDAuMTUKOyB0cnVlID0gdGhlIGludGVyYWN0aW9uIHJldGljbGUvcHJvbXB0IGZvbGxvd3MgeW91ciBhaW0gcG9pbnQgd2hpbGUgeW91ciBoZWFkCjsgaXMgdHVybmVkLiBmYWxzZSA9IGxlYXZlIGl0IGF0IHNjcmVlbiBjZW50cmUgKHZhbmlsbGEpLgpTaG93UmV0aWNsZSA9IHRydWUKOyBZYXcgbW9kZTogdHJ1ZSA9IGhvcml6b24tbG9ja2VkIHlhdyAoZGVmYXVsdCksIGZhbHNlID0gY2FtZXJhLWxvY2FsCldvcmxkU3BhY2VZYXcgPSB0cnVlCgpbUmV0aWNsZV0KOyBGaW5lLXR1bmUgcmV0aWNsZSBmb2xsb3cgc3RyZW5ndGggKDEuMCA9IGdlb21ldHJpYyBhaW0gcG9pbnQpLiBSYWlzZS9sb3dlciBpZgo7IHRoZSByZXRpY2xlIG92ZXIvdW5kZXJzaG9vdHMgdGhlIHRoaW5nIHlvdSdyZSBwb2ludGluZyBhdC4KU2NhbGUgPSAxLjAKOyBDb21tYS1zZXBhcmF0ZWQgVU1HIHdpZGdldCBuYW1lcyBtb3ZlZCB0byB0aGUgYWltIHBvaW50ICh0aGUgbG9vay1hdCByZXRpY2xlCjsgYW5kIG9iamVjdCBsYWJlbCkuIExlYXZlIGJsYW5rIHRvIHVzZSB0aGUgYnVpbHQtaW4gZGVmYXVsdHMKOyAoQ3Jvc3NoYWlyLCBMb29rQXRPYmplY3ROYW1lKS4KV2lkZ2V0TmFtZXMgPQoKW1Bvc2l0aW9uXQo7IDZET0YgbGVhbiB0cmFja2luZyAtIG1vdmUgeW91ciBoZWFkIHRvIGxlYW4gYXJvdW5kIHRoZSBjYWJpbi4gVG9nZ2xlIGluLWdhbWUKOyB3aXRoIFBhZ2UgVXAgKGN5Y2xlcyByb3RhdGlvbitwb3NpdGlvbiAvIHJvdGF0aW9uIG9ubHkgLyBwb3NpdGlvbiBvbmx5KS4KRW5hYmxlZCA9IHRydWUKU2Vuc2l0aXZpdHlYID0gMS4wClNlbnNpdGl2aXR5WSA9IDEuMApTZW5zaXRpdml0eVogPSAxLjAKOyBDb3JyZWN0IGEgdHJhY2tlciB3aG9zZSBheGlzIHJ1bnMgb3Bwb3NpdGUgdG8gdGhpcyBvbmUuIEludmVydFogaXMgYXBwbGllZAo7IGJlZm9yZSB0aGUgdHJhdmVsIGNsYW1wLCBzbyB0dXJuaW5nIGl0IG9uIHN3YXBzIHdoaWNoIG9mIExpbWl0WiBhbmQKOyBMaW1pdFpCYWNrIGJlbG93IHRoZSBmb3J3YXJkIGxlYW4gaXMgbWVhc3VyZWQgYWdhaW5zdC4gVGhlIG1vZCBhbHJlYWR5Cjsgb3JpZW50cyBldmVyeSBheGlzIGZvciB0aGlzIGdhbWUsIHNvIGFsbCB0aHJlZSBhcmUgb2ZmIGJ5IGRlZmF1bHQuCkludmVydFggPSBmYWxzZQpJbnZlcnRZID0gZmFsc2UKSW52ZXJ0WiA9IGZhbHNlCjsgVHJhdmVsIGxpbWl0cyBpbiBtZXRlcnMgKGhvdyBmYXIgdGhlIHZpZXcgY2FuIGxlYW4pLgpMaW1pdFggPSAwLjMwCkxpbWl0WSA9IDAuMjAKOyBGb3J3YXJkIGdldHMgdGhlIGdlbmVyb3VzIGFsbG93YW5jZTsgbGVhbmluZyBiYWNrIGlzIHJlc3RyaWN0ZWQgc28gdGhlIHZpZXcKOyBkb2VzIG5vdCBjbGlwIHRocm91Z2ggdGhlIHNlYXQgYW5kIHBsYXllci4KTGltaXRaID0gMC40MApMaW1pdFpCYWNrID0gMC4xMAo7IFBvc2l0aW9uIHVzZXMgdGhlIFtUcmFja2luZ10gTG9jYWxTbW9vdGhpbmcgLyBSZW1vdGVTbW9vdGhpbmcgdmFsdWVzLgoKW0hvdGtleXNdCjsgVG9nZ2xlIHRyYWNraW5nIChFbmQpIGFuZCBjeWNsZSB0cmFja2luZyBtb2RlIChQYWdlIFVwKSBhcmUgZml4ZWQsIGVhY2ggYWxzbwo7IHJlYWNoYWJsZSB3aXRoIGEgQ3RybCtTaGlmdCBjaG9yZCAoWSAvIEcpLiBPbmx5IHRoZSB5YXctbW9kZSB0b2dnbGUgaXMKOyByZWJpbmRhYmxlIGhlcmUuIFZLIGNvZGU6IFBhZ2VEb3duID0gMHgyMi4KVG9nZ2xlWWF3TW9kZSA9IDB4MjIK" }
+    ]
+  },
 
   "files": [
-    { "source": "plugins/dxgi.dll", "target": "Ride/Binaries/Win64/dxgi.dll", "backup": true }
+    { "source": "plugins/dxgi.dll", "target": "dxgi.dll", "anchor": "exe_dir", "backup": true }
   ],
 
   "runtime_requirements": [
@@ -17,7 +23,8 @@
       "id": "dxgi-proxy-original",
       "type": "system-file-copy",
       "source": "%WINDIR%/System32/dxgi.dll",
-      "target": "Ride/Binaries/Win64/dxgi_orig.dll",
+      "target": "dxgi_orig.dll",
+      "anchor": "exe_dir",
       "required": true,
       "reason": "The mod ships as a dxgi.dll proxy planted next to the game exe. The real Windows dxgi.dll must be captured alongside it as dxgi_orig.dll so the proxy can forward every DXGI export to it; without it the game cannot create its swapchain and fails to launch. The file is not redistributable, so it is captured from the user's own System32 at install time."
     }
