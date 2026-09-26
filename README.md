@@ -85,7 +85,7 @@ folder for whichever build you have:
 | Steam     | `<steam>\steamapps\common\Ride\Ride\Binaries\Win64\` |
 | Xbox Game Pass | `<XboxGames>\RV There Yet\Content\Ride\Binaries\WinGDK\` |
 
-You need three files in that folder:
+You need two files in that folder:
 
 1. `dxgi.dll` - the mod itself (from the release ZIP's `plugins/`). This is a
    DXGI proxy: every DXGI call the game makes flows through us, which is how we
@@ -101,7 +101,9 @@ You need three files in that folder:
    :: Xbox Game Pass
    copy C:\Windows\System32\dxgi.dll "C:\XboxGames\RV There Yet\Content\Ride\Binaries\WinGDK\dxgi_orig.dll"
    ```
-3. `HeadTracking.ini` - mod configuration.
+
+The mod creates its settings file, `CameraUnlock.ini`, in the same folder the
+first time the game starts with it (see [Configuration](#configuration)).
 
 The Nexus ZIP contains both `Ride\Binaries\Win64\` and `Ride\Binaries\WinGDK\`
 trees in one bundle. Extract it at the package root and the files land in the
@@ -185,7 +187,7 @@ view sits off to one side, centre it in the tracker.
 
 ## Controls
 
-Two equivalent binding sets - use whichever your keyboard has:
+Two equivalent binding sets by default - use whichever your keyboard has:
 
 | Action                          | Nav-cluster | Chord          |
 |---------------------------------|-------------|----------------|
@@ -200,83 +202,144 @@ Two equivalent binding sets - use whichever your keyboard has:
 3. Rotational tracking disabled, positional tracking enabled
 4. Back to normal
 
+The tracking mode and the yaw mode are saved to `CameraUnlock.ini` when you
+change them, so the game starts in the mode you left it in. Turning tracking on
+or off is not saved: the game starts with head tracking on or off as
+`EnableOnStartup` says. Each hotkey is a list of keys in the `[Hotkeys]`
+section of `CameraUnlock.ini`, the chords included, and you can change any of
+them there.
+
+The game's interaction reticle and the name of what you are looking at follow
+your aim while your head is turned. No setting turns that off.
+
 ## Configuration
 
-Settings live in `HeadTracking.ini`, next to the game executable
-(`Ride\Binaries\Win64\` for Steam, `Ride\Binaries\WinGDK\` for Xbox Game Pass). Edit
-it and restart the game to apply changes. If both builds are installed, each has
-its own copy of the file.
+<!-- cameraunlock:config -->
+The mod reads its settings from `CameraUnlock.ini` in the game folder, at one of these paths depending on the store the game came from:
+
+- `Ride\Binaries\Win64\CameraUnlock.ini`
+- `Ride\Binaries\WinGDK\CameraUnlock.ini`
+
+It creates the file when it starts and finds none. Edit it with any text editor.
+
+A setting set to `default` takes its value from `Defaults.ini`, which every head tracking mod that keeps its settings in `CameraUnlock.ini` reads. Head tracking mods that keep their settings in another file do not read it, and neither do earlier versions of this mod. Writing a value in place of `default` changes that setting for this game only. When the mod saves a setting that a hotkey changed in game, it writes the new value in place of `default`, so that setting no longer follows `Defaults.ini` in this game until you set it to `default` again.
+
+`Defaults.ini` is `%AppData%\CameraUnlock\Defaults.ini` on Windows; `$XDG_CONFIG_HOME/CameraUnlock/Defaults.ini` on Linux, or `~/.config/CameraUnlock/Defaults.ini` where `XDG_CONFIG_HOME` is not set, under Wine and Proton too; and `~/Library/Application Support/CameraUnlock/Defaults.ini` on macOS. The mod's log, where it writes one, names the file it read.
+
+When the mod starts and finds no `Defaults.ini`, it creates one holding the built-in values, unless Windows runs the game as a packaged app. The mod never changes `Defaults.ini` after that. Edit it with any text editor.
+
+Earlier versions of the mod kept these settings in `HeadTracking.ini`, in the same folder. The first time this version starts and finds no `CameraUnlock.ini`, it reads your settings from `HeadTracking.ini` and writes them into `CameraUnlock.ini`. It never changes `HeadTracking.ini`, and does not read it again while `CameraUnlock.ini` exists.
+
+A setting that the defaults below set to `default` is written as `default` when the value imported for it equals its default at that start, which is the value `Defaults.ini` gives it, or the built-in value where `Defaults.ini` gives none. It then follows `Defaults.ini`. Every other setting is written with the value imported for it. `RotationEnabled` and `PositionEnabled` are one setting here, the tracking mode, so both are written as `default` or neither is.
+
+Comments, and keys the mod never read, are not carried over. Nor are these, where your old file had them:
+
+- Reticle settings, and a key that toggled the reticle.
+- A sensitivity, scale, deadzone, response curve or axis inversion you changed from its default. Set these in your tracker instead.
+- The setting for a feature that earlier versions shipped switched off while it was untested. It now follows the mod's default.
+
+An older version of the mod reads `HeadTracking.ini` and never reads `CameraUnlock.ini`, so a setting you change after updating is not in `HeadTracking.ini`.
+
+Deleting only `CameraUnlock.ini` makes the next start read `HeadTracking.ini` again. To go back to the defaults, replace everything in `CameraUnlock.ini` with the defaults below. Every setting they set to `default` then follows `Defaults.ini`.
+
+The built-in value of each setting set to `default` below:
+
+- `UdpPort=4242`
+- `EnableOnStartup=true`
+- `WorldSpaceYaw=true`
+- `RotationEnabled=true`
+- `LocalSmoothing=0.0`
+- `RemoteSmoothing=0.15`
+- `PositionEnabled=true`
+- `PositionLimitX=0.3`
+- `PositionLimitY=0.2`
+- `PositionLimitYDown=0.2`
+- `PositionLimitZ=0.4`
+- `PositionLimitZBack=0.1`
+- `ToggleKey=End, Ctrl+Shift+Y`
+- `CycleTrackingModeKey=PageUp, Ctrl+Shift+G`
+- `YawModeKey=PageDown, Ctrl+Shift+H`
+
+With every setting at its default, the file reads:
+
+```ini
+; RV There Yet? head tracking settings.
+; Comments start with ; and go on their own line. Text after a value is part of the value.
+; Hotkeys are key names such as End, PageUp or Ctrl+Shift+Y. Separate several with commas; leave empty for none.
+; A setting set to default takes its value from Defaults.ini, which every head tracking mod
+; that keeps its settings in CameraUnlock.ini reads: %AppData%\CameraUnlock\Defaults.ini on
+; Windows, $XDG_CONFIG_HOME/CameraUnlock/Defaults.ini (normally ~/.config/CameraUnlock) on
+; Linux, under Wine and Proton too, and ~/Library/Application Support/CameraUnlock/Defaults.ini
+; on macOS. The log names the file it read. Write a value instead of default to change that
+; setting for this game only.
+
+[CameraUnlock]
+; Written by the mod. Leave this section in place.
+ConfigFormat=1
+
+[Network]
+; UDP port the mod receives tracker data on (OpenTrack protocol).
+UdpPort=default
+
+[General]
+; true: head tracking is on when the game starts. ToggleKey turns it on and off.
+EnableOnStartup=default
+; true: yaw turns around the world's up axis. false: around the camera's own up axis.
+WorldSpaceYaw=default
+; true: turning your head turns the view.
+; Tracking mode at startup, with PositionEnabled. The mode hotkey changes both.
+RotationEnabled=default
+
+[Smoothing]
+; Smoothing when the tracker runs on this PC. 0 is the least, 1 the most.
+LocalSmoothing=default
+; Smoothing when the tracker is another device on the network, such as a phone.
+; 0 is the least, 1 the most.
+RemoteSmoothing=default
+
+[Position]
+; true: moving your head moves the view.
+; Tracking mode at startup, with RotationEnabled. The mode hotkey changes both.
+PositionEnabled=default
+; How far, in metres, leaning left or right can move the view.
+PositionLimitX=default
+; How far, in metres, raising your head can move the view.
+PositionLimitY=default
+; How far, in metres, lowering your head can move the view.
+PositionLimitYDown=default
+; How far, in metres, leaning forward can move the view.
+PositionLimitZ=default
+; How far, in metres, leaning back can move the view.
+PositionLimitZBack=default
+
+[Hotkeys]
+; Turns head tracking on and off.
+ToggleKey=default
+; Changes the tracking mode: rotation and position, rotation only, position only.
+CycleTrackingModeKey=default
+; Switches yaw between the world's up axis and the camera's own (WorldSpaceYaw).
+YawModeKey=default
+```
+<!-- /cameraunlock:config -->
+
+Changes take effect the next time the game starts. If both builds are
+installed, each has its own `CameraUnlock.ini`.
 
 On the Xbox app build, Windows may block normal saves under the game folder.
 Open Notepad as administrator, then open:
 
 ```cmd
-C:\XboxGames\RV There Yet\Content\Ride\Binaries\WinGDK\HeadTracking.ini
+C:\XboxGames\RV There Yet\Content\Ride\Binaries\WinGDK\CameraUnlock.ini
 ```
 
 If you installed the game to another drive or folder, use that install's
-`Content\Ride\Binaries\WinGDK\HeadTracking.ini` path instead.
-
-```ini
-[Network]
-Port = 4242            ; OpenTrack UDP port
-
-[Tracking]
-; start with tracking active
-EnableOnStartup = true
-YawSensitivity = 1.0   ; multiplier for left/right look
-PitchSensitivity = 1.0 ; multiplier for up/down look
-RollSensitivity = 1.0  ; multiplier for head tilt
-InvertYaw = false
-InvertPitch = false
-InvertRoll = false
-LocalSmoothing = 0.0   ; tracker on this PC (loopback); 0.0 = responsive, 1.0 = heavy
-RemoteSmoothing = 0.15 ; tracker on a network device (eg a phone over WiFi)
-; move the game's reticle to the aim point
-ShowReticle = true
-; true = horizon-locked yaw (default), false = camera-local
-WorldSpaceYaw = true
-
-[Reticle]
-Scale = 1.0            ; reticle follow strength (1.0 = geometric aim point)
-; UMG widgets moved to the aim point; blank = built-in defaults
-; (Crosshair, LookAtObjectName). Leave the value empty, with nothing after
-; the "=" - any text there, comment included, is taken as a widget name.
-WidgetNames =
-
-[Position]
-; 6DOF head position tracking
-Enabled = true
-SensitivityX = 1.0
-SensitivityY = 1.0
-SensitivityZ = 1.0
-; correct a tracker whose axis runs opposite to this one; InvertZ is applied
-; before the travel clamp, so turning it on swaps which of LimitZ and
-; LimitZBack the forward lean is measured against; the mod already orients
-; every axis for this game, so all three are off
-InvertX = false
-InvertY = false
-InvertZ = false
-LimitX = 0.30          ; max sideways lean in meters
-LimitY = 0.20          ; max vertical move in meters
-; forward gets the generous allowance; leaning back is restricted so the view
-; does not clip through the seat and player
-LimitZ = 0.40
-LimitZBack = 0.10
-; Position uses the [Tracking] LocalSmoothing / RemoteSmoothing values.
-
-[Hotkeys]
-; Toggle tracking (End) and cycle tracking mode (Page Up) are fixed, each also
-; reachable with a Ctrl+Shift chord. Only the yaw-mode toggle is rebindable
-; here. VK code: PageDown = 0x22.
-ToggleYawMode = 0x22
-```
+`Content\Ride\Binaries\WinGDK\CameraUnlock.ini` path instead.
 
 ## Troubleshooting
 
 **Mod not loading**
 
-- Confirm `dxgi.dll`, `dxgi_orig.dll`, and `HeadTracking.ini` are all in the
+- Confirm `dxgi.dll` and `dxgi_orig.dll` are both in the
   binaries folder for your build - `Ride\Binaries\Win64\` for Steam,
   `Ride\Binaries\WinGDK\` for Xbox Game Pass. Missing `dxgi_orig.dll` is the most
   common cause - the proxy forwards every DXGI export there, so without it the
@@ -300,14 +363,16 @@ ToggleYawMode = 0x22
 **Jittery / unstable tracking**
 
 - Raise `RemoteSmoothing` (phone or other network tracker) or `LocalSmoothing`
-  (tracker on this PC) in `[Tracking]` toward 0.3-0.5.
+  (tracker on this PC) in the `[Smoothing]` section of `CameraUnlock.ini`
+  toward 0.3-0.5.
 - On a wireless or phone tracker, expect more jitter; `RemoteSmoothing` already
   defaults to 0.15 for that case, and raising it reduces jitter further.
 
 **Wrong rotation axis**
 
-- If a look axis goes the wrong way, set the matching `Invert` flag (`InvertYaw`
-  / `InvertPitch` / `InvertRoll`) to `true`.
+- If a look axis goes the wrong way, invert it in your tracker app. The mod
+  applies the pose as the tracker sends it and has no inversion setting of its
+  own.
 
 **Yaw feels wrong when looking up or down at extreme angles**
 
@@ -317,15 +382,18 @@ ToggleYawMode = 0x22
 
 ## Updating
 
-Download the new release and run `install.cmd` again. Your config is preserved.
+Download the new release and run `install.cmd` again. Neither the installer
+nor the release ZIPs carry a settings file, so `CameraUnlock.ini` stays as you
+left it.
 
 ## Uninstalling
 
-Run `uninstall.cmd`. This removes `dxgi.dll`, `dxgi_orig.dll`, and
-`HeadTracking.ini` from the binaries folder of every detected install (Steam
-and / or Xbox Game Pass). If you had a pre-existing `dxgi.dll` (e.g. ReShade) when
-you installed the mod, the original is restored from its `.backup` copy. Pass
-`/force` to discard the backup instead.
+Run `uninstall.cmd`. This removes `dxgi.dll` and `dxgi_orig.dll` from the
+binaries folder of every detected install (Steam and / or Xbox Game Pass). If
+you had a pre-existing `dxgi.dll` (e.g. ReShade) when you installed the mod, the
+original is restored from its `.backup` copy. Pass `/force` to discard the
+backup instead. Your settings, `CameraUnlock.ini` and the `HeadTracking.ini` an
+earlier version used, stay where they are.
 
 ## Building from Source
 

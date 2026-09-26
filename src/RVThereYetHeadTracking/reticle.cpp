@@ -63,9 +63,9 @@ namespace RVThereYetHeadTracking::reticle
         // widget's slate units, which the viewport DPI-scales to reach screen
         // pixels - so our screen-pixel offset must be divided by this scale to
         // land right. Read once from UWidgetLayoutLibrary::GetViewportScale so
-        // the reticle is correct at Scale=1.0 across resolutions (rather than
-        // baking a resolution-specific constant). 1.0 until resolved / if the
-        // read fails (then manual [Reticle] Scale compensates).
+        // the reticle is correct across resolutions (rather than baking a
+        // resolution-specific constant). 1.0 until resolved / if the read
+        // fails.
         float g_viewportDpiScale = 1.0f;
         bool  g_dpiResolved = false;
         std::uintptr_t g_getViewportScaleFn = 0;
@@ -89,8 +89,8 @@ namespace RVThereYetHeadTracking::reticle
         // The look-at reticle + object label are named leaf widgets inside
         // WG_PlayerHUD_C's tree (Crosshair = Image, LookAtObjectName =
         // TextBlock). We move those leaves directly - not the HUD - so health
-        // bars etc. stay put. Config-overridable (comma-separated names).
-        std::vector<std::string> g_targetNames = { "Crosshair", "LookAtObjectName" };
+        // bars etc. stay put.
+        const std::vector<std::string> g_targetNames = { "Crosshair", "LookAtObjectName" };
         struct ReticleTarget { std::uintptr_t obj; std::uintptr_t cls; };
         std::vector<ReticleTarget> g_targets;
         std::uint64_t g_lastTargetScan = 0;
@@ -133,14 +133,14 @@ namespace RVThereYetHeadTracking::reticle
             return RegisteredInObjectArray(t.obj);
         }
 
-        std::atomic<bool> g_show{true};
         // SetRenderTranslation is persistent widget state, so once we have
         // moved the reticle off-centre we must explicitly drive it back to
         // (0,0) when tracking stops (toggle off, menu, tracker loss) - the
         // hook's early-return paths would otherwise leave it stuck offset.
         bool g_wasOffset = false;
         std::atomic<bool> g_testNudge{false};  // Ctrl+Shift+J: force +300px to verify plumbing
-        float g_scale = 1.0f;   // common (both axes); F7/F8
+        // Both axes; F7/F8 in a build with RVTY_DEV_HOTKEYS, 1 otherwise.
+        float g_scale = 1.0f;
 
         // Resolve UObject::ProcessEvent off a UWidget's vtable (slot 76). Must
         // be a widget, not an actor - AActor overrides the slot with a net-aware
@@ -189,8 +189,7 @@ namespace RVThereYetHeadTracking::reticle
         // Read the UMG viewport DPI scale via
         // UWidgetLayoutLibrary::GetViewportScale(WorldContextObject) -> float.
         // Static UFunction, so we call it on the library CDO with a live widget
-        // as the world context. One-shot; on failure DPI stays 1.0 and manual
-        // [Reticle] Scale still works.
+        // as the world context. One-shot; on failure DPI stays 1.0.
         void ResolveDpiScale(std::uintptr_t worldCtxWidget)
         {
             if (g_dpiResolved || !g_processEvent || !worldCtxWidget) return;
@@ -245,7 +244,7 @@ namespace RVThereYetHeadTracking::reticle
 
         // Read the reticle widget's accumulated geometry scale via
         // UWidget::GetCachedGeometry() -> FGeometry. One-shot; on failure the
-        // scale stays 0 (unused) and manual [Reticle] Scale still works.
+        // scale stays 0 (unused).
         // Find the RENDERED reticle instance among the (possibly pooled)
         // targets - the one whose cached geometry has a non-zero size - and
         // take its accumulated scale. This build's FGeometry (confirmed
@@ -344,7 +343,7 @@ namespace RVThereYetHeadTracking::reticle
             if (!ProjectDirToScreen(pc, loc, fwdDir, fwdSX, fwdSY)) return false;
 
             // Differential in the rendered view's own pixel scale. Only the
-            // optional user fine-tune applies here; the geometry scale (which
+            // developer tuning scale applies here; the geometry scale (which
             // folds in DPI) is divided out later in DriveReticle.
             const double s = static_cast<double>(g_scale);
             dx = (aimSX - fwdSX) * s;
@@ -436,8 +435,6 @@ namespace RVThereYetHeadTracking::reticle
         // or reset to (0,0) when there's no valid offset. Called from the hook.
         void DriveReticle(double dx, double dy, bool valid)
         {
-            if (!g_show.load(std::memory_order_relaxed)) return;
-
             // SetRenderTranslation isn't registered until UMG spins up, so
             // resolve it lazily (rate-limited) rather than at bootstrap.
             if (!g_setRenderTranslationFn) {
@@ -546,27 +543,18 @@ namespace RVThereYetHeadTracking::reticle
         }
     }
 
-    void Configure(const Settings& s)
-    {
-        g_show.store(s.show);
-        g_scale = s.scale;
-        if (!s.targetNames.empty()) g_targetNames = s.targetNames;
-    }
-
     void LogBootstrapSummary()
     {
         std::string tn;
         for (const std::string& n : g_targetNames) { if (!tn.empty()) tn += ","; tn += n; }
-        Log::Line("reticle: targets=[%s] showReticle=%s scale=%.2f "
+        Log::Line("reticle: targets=[%s] scale=%.2f "
             "(SetRenderTranslation resolves lazily once UMG is up)",
-            tn.c_str(), g_show.load() ? "true" : "false", g_scale);
+            tn.c_str(), g_scale);
     }
 
     void UpdateFromView(void* self, void* outView,
                         const FQuat4d& baseQ, const FQuat4d& viewQ)
     {
-        if (!g_show.load(std::memory_order_relaxed)) return;
-
         static std::atomic<std::uint64_t> s_lastUpdate{0};
         const std::uint64_t now = GetTickCount64();
         if (now - s_lastUpdate.load(std::memory_order_relaxed) < kUpdateIntervalMs) return;
@@ -600,6 +588,6 @@ namespace RVThereYetHeadTracking::reticle
     void AdjustScale(float delta)
     {
         g_scale = std::clamp(g_scale + delta, 0.1f, 5.0f);
-        Log::Line("reticle scale -> %.2f (save to [Reticle] Scale)", g_scale);
+        Log::Line("reticle scale -> %.2f", g_scale);
     }
 }

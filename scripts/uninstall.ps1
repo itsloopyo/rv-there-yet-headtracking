@@ -101,7 +101,9 @@ foreach ($name in $exeNames) {
     }
 }
 
-$modFiles  = @('dxgi.dll', 'dxgi_orig.dll', 'HeadTracking.ini')
+# CameraUnlock.ini and HeadTracking.ini are the player's settings, and an
+# older version of the mod reads HeadTracking.ini, so both stay.
+$modFiles  = @('dxgi.dll', 'dxgi_orig.dll')
 # Unambiguously ours by name; removed unconditionally.
 $legacyFiles = @('RVThereYetHeadTracking.asi')
 # Pre-DXGI dev builds used generic proxy names, but no release ever shipped
@@ -126,7 +128,7 @@ foreach ($install in $installs) {
     # the freshly restored original (the backup no longer exists at that point,
     # so a "does a .backup still exist?" check would wrongly report false).
     $restored = @{}
-    foreach ($file in 'dxgi.dll','HeadTracking.ini') {
+    foreach ($file in 'dxgi.dll') {
         $current = Join-Path $exeDir $file
         $backup  = "$current.backup"
         if (Test-Path $backup) {

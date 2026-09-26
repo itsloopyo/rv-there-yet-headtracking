@@ -32,9 +32,6 @@ Copy-Item (Join-Path $projectDir "scripts/uninstall.ps1") -Destination $staging
 New-Item -ItemType Directory -Path (Join-Path $staging "plugins") | Out-Null
 Copy-Item $dxgiProxy -Destination (Join-Path $staging "plugins")
 
-$ini = Join-Path $projectDir "HeadTracking.ini"
-if (Test-Path $ini) { Copy-Item $ini -Destination (Join-Path $staging "plugins") }
-
 # shared/ bundle for install.cmd/uninstall.cmd: find-game.ps1 +
 # GamePathDetection.psm1 + games.json + optional script bodies.
 # -NoRefresh because release.ps1 owns submodule sync; local repackages
@@ -47,13 +44,12 @@ Copy-SharedBundle -StagingDir $staging -NoRefresh
 # files[] itself, anchored to the exe directory of the install it detected
 # (Win64 on Steam, WinGDK on Game Pass). install.cmd still ships for standalone
 # installs and for the launcher to remove an older script install on upgrade.
+# Neither ZIP carries a config: the mod creates CameraUnlock.ini at its first
+# launch.
 $manifest = Join-Path $projectDir "launcher-manifest.json"
 if (-not (Test-Path $manifest)) {
     throw "launcher-manifest.json not found at project root. The launcher manifest must ship in the installer ZIP."
 }
-# loader.seed carries a base64 copy of HeadTracking.ini, and it is the config a
-# launcher-deployed user gets, so it must not drift from the file install.cmd seeds.
-Assert-ManifestSeedsMatchShipped -ManifestPath $manifest -ProjectRoot $projectDir
 Copy-Item $manifest -Destination $staging
 
 # The installer ZIP is a binary distribution: MinHook's BSD-2-Clause and the
@@ -83,7 +79,6 @@ foreach ($subdir in "Ride\Binaries\Win64", "Ride\Binaries\WinGDK") {
     $deployDir = Join-Path $nexusStaging $subdir
     New-Item -ItemType Directory -Path $deployDir -Force | Out-Null
     Copy-Item $dxgiProxy -Destination $deployDir
-    if (Test-Path $ini) { Copy-Item $ini -Destination $deployDir }
 }
 $nexusZip = Join-Path $releaseDir "RVThereYetHeadTracking-v$version-nexus.zip"
 # The Nexus ZIP is a binary distribution too: the licences of everything

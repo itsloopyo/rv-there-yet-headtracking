@@ -1,17 +1,8 @@
 // Behaviour lock for the 6DOF lean boundary: which way the view moves for a
-// physical lean, how much of the asymmetric budget each direction gets, and
-// whether the shipped HeadTracking.ini still agrees with the code defaults.
-//
-// The last of those is the bug that shipped. The INI carried InvertZ=true with
-// LimitZ and LimitZBack swapped, and the two errors cancelled, so the mod
-// behaved correctly for anyone who kept the file. The code defaults said the
-// opposite, and the mod writes no INI of its own, so a user who deleted it got
-// the lean inverted and the budgets mirrored.
+// physical lean, and how much of the asymmetric budget each direction gets.
 
 #include <cmath>
 #include <cstdio>
-#include <fstream>
-#include <string>
 #include <utility>
 
 #include "position_boundary.h"
@@ -50,16 +41,13 @@ void ForwardLeanMovesViewForward() {
     CheckNear(heave, 0.1 * pd::kMetersToUE, "up maps to +heave, in centimetres");
 }
 
+// The processor as the mod runs it at CameraUnlock.ini's defaults: no
+// sensitivity or inversion of its own, the default limits.
 cameraunlock::PositionSettings DefaultSettings() {
     cameraunlock::PositionSettings s;
-    s.sensitivity_x = pd::kSensitivityX;
-    s.sensitivity_y = pd::kSensitivityY;
-    s.sensitivity_z = pd::kSensitivityZ;
-    s.invert_x = pd::kInvertX;
-    s.invert_y = pd::kInvertY;
-    s.invert_z = pd::kInvertZ;
     s.limit_x = pd::kLimitX;
     s.limit_y = pd::kLimitY;
+    s.limit_y_down = pd::kLimitYDown;
     s.limit_z = pd::kLimitZ;
     s.limit_z_back = pd::kLimitZBack;
     return s;
@@ -128,75 +116,12 @@ void NegatingAnAxisIsFlippingItsInversionAndSwappingItsLimits() {
     Check(same, "negating every axis equals flipping each inversion and swapping each axis's limits");
 }
 
-// Minimal reader for the shipped file: last "key = value" wins, sections are
-// tracked so [Position] keys are not confused with same-named ones elsewhere.
-std::string ReadIniValue(const char* section, const char* key) {
-    std::ifstream file(RVTY_SHIPPED_INI);
-    if (!file) {
-        std::printf("FAIL: cannot open %s\n", RVTY_SHIPPED_INI);
-        ++g_failures;
-        return std::string();
-    }
-    std::string line, current, found;
-    while (std::getline(file, line)) {
-        const std::size_t start = line.find_first_not_of(" \t\r");
-        if (start == std::string::npos || line[start] == ';' || line[start] == '#') continue;
-        const std::size_t end = line.find_last_not_of(" \t\r");
-        const std::string trimmed = line.substr(start, end - start + 1);
-        if (trimmed.front() == '[') {
-            current = trimmed.substr(1, trimmed.find(']') - 1);
-            continue;
-        }
-        const std::size_t eq = trimmed.find('=');
-        if (eq == std::string::npos || current != section) continue;
-        std::string k = trimmed.substr(0, eq);
-        std::string v = trimmed.substr(eq + 1);
-        const std::size_t ke = k.find_last_not_of(" \t");
-        k = k.substr(0, ke + 1);
-        const std::size_t vs = v.find_first_not_of(" \t");
-        if (vs != std::string::npos) v = v.substr(vs); else v.clear();
-        if (k == key) found = v;
-    }
-    return found;
-}
-
-void CheckIniBool(const char* key, bool expected) {
-    const std::string value = ReadIniValue("Position", key);
-    const bool actual = (value == "true" || value == "1");
-    if (actual == expected && !value.empty()) return;
-    std::printf("FAIL: shipped INI [Position] %s is \"%s\", code default is %s\n",
-                key, value.c_str(), expected ? "true" : "false");
-    ++g_failures;
-}
-
-void CheckIniFloat(const char* key, float expected) {
-    const std::string value = ReadIniValue("Position", key);
-    if (!value.empty() && std::fabs(std::stod(value) - expected) <= 1e-6) return;
-    std::printf("FAIL: shipped INI [Position] %s is \"%s\", code default is %.3f\n",
-                key, value.c_str(), expected);
-    ++g_failures;
-}
-
-void ShippedIniMatchesCodeDefaults() {
-    CheckIniBool("InvertX", pd::kInvertX);
-    CheckIniBool("InvertY", pd::kInvertY);
-    CheckIniBool("InvertZ", pd::kInvertZ);
-    CheckIniFloat("SensitivityX", pd::kSensitivityX);
-    CheckIniFloat("SensitivityY", pd::kSensitivityY);
-    CheckIniFloat("SensitivityZ", pd::kSensitivityZ);
-    CheckIniFloat("LimitX", pd::kLimitX);
-    CheckIniFloat("LimitY", pd::kLimitY);
-    CheckIniFloat("LimitZ", pd::kLimitZ);
-    CheckIniFloat("LimitZBack", pd::kLimitZBack);
-}
-
 } // namespace
 
 int main() {
     ForwardLeanMovesViewForward();
     LeanBudgetsAreNotReversed();
     NegatingAnAxisIsFlippingItsInversionAndSwappingItsLimits();
-    ShippedIniMatchesCodeDefaults();
 
     if (g_failures != 0) {
         std::printf("%d check(s) failed\n", g_failures);

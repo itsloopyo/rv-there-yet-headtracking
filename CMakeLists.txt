@@ -97,6 +97,7 @@ add_library(${MOD_NAME} SHARED
     src/RVThereYetHeadTracking/builds/build_registry.cpp
     src/RVThereYetHeadTracking/builds/steam_offsets.cpp
     src/RVThereYetHeadTracking/builds/gdk_offsets.cpp
+    src/RVThereYetHeadTracking/config.cpp
     src/legacy_config/legacy_config.cpp
 )
 
@@ -137,10 +138,10 @@ set_target_properties(${MOD_NAME} PROPERTIES
     OUTPUT_NAME "dxgi"
 )
 
-# Behaviour lock for the lean boundary and for the shipped INI agreeing with
-# the code defaults. A separate executable linking none of the hook machinery,
+# Behaviour lock for the lean boundary, the config tests and the config
+# differential test. Separate executables linking none of the hook machinery,
 # so `pixi run test` runs anywhere the mod builds, with no game installed.
-option(RVTY_BUILD_TESTS "Build the position behaviour tests and the config differential test" ON)
+option(RVTY_BUILD_TESTS "Build the position behaviour tests and the config tests" ON)
 if(RVTY_BUILD_TESTS)
     enable_testing()
 
@@ -149,14 +150,33 @@ if(RVTY_BUILD_TESTS)
         src/RVThereYetHeadTracking
         cameraunlock-core/cpp/include
     )
-    target_compile_definitions(rvty_position_tests PRIVATE
-        RVTY_SHIPPED_INI="${CMAKE_CURRENT_SOURCE_DIR}/HeadTracking.ini"
-    )
     add_test(NAME rvty_position_tests COMMAND rvty_position_tests)
+
+    # The committed config against the table's fresh render, and the saves.
+    # `rvty_config_tests --render-config <path>` is pixi run render-config.
+    add_executable(rvty_config_tests
+        tests/config_tests.cpp
+        src/RVThereYetHeadTracking/config.cpp
+        src/legacy_config/legacy_config.cpp
+    )
+    target_include_directories(rvty_config_tests PRIVATE
+        src
+        src/RVThereYetHeadTracking
+        cameraunlock-core/cpp/include
+    )
+    target_compile_definitions(rvty_config_tests PRIVATE
+        RVTY_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+    target_link_libraries(rvty_config_tests PRIVATE cameraunlock)
+    if(MSVC)
+        target_compile_options(rvty_config_tests PRIVATE /W4 /WX /EHsc)
+    endif()
+    add_test(NAME rvty_config_tests COMMAND rvty_config_tests)
 
     # The canonical config conversion's differential test: v0.3.0's reader and
     # startup code (the oracle, transcribed in tests/config_differential/oracle)
-    # against the frozen reader in src/legacy_config/. The oracle is compiled on
+    # against the frozen reader in src/legacy_config/, and that against the
+    # config owner's migration into CameraUnlock.ini. The oracle is compiled on
     # its own with the mod's and core's namespaces renamed, against byte copies
     # of the core headers v0.3.0's pin (3465659) had that core has changed since,
     # so it links beside today's code and nothing in it can resolve to a symbol of
@@ -179,6 +199,7 @@ if(RVTY_BUILD_TESTS)
 
     add_executable(rvty_config_differential
         ${RVTY_DIFFERENTIAL_DIR}/differential_tests.cpp
+        src/RVThereYetHeadTracking/config.cpp
         src/legacy_config/legacy_config.cpp
     )
     target_include_directories(rvty_config_differential PRIVATE
@@ -195,6 +216,12 @@ if(RVTY_BUILD_TESTS)
         target_compile_options(rvty_config_differential PRIVATE /W4 /WX /EHsc)
     endif()
     add_test(NAME rvty_config_differential COMMAND rvty_config_differential)
+    # Core's canonical config lint over the committed file and every file the
+    # differential test migrated, which it writes beside itself under migrated\.
+    add_test(NAME rvty_config_lint COMMAND node
+             ${RVTY_DIFFERENTIAL_DIR}/lint-migrated.mjs
+             $<TARGET_FILE_DIR:rvty_config_differential>/migrated)
+    set_tests_properties(rvty_config_lint PROPERTIES DEPENDS rvty_config_differential)
 
     # What the differential test compiles is pinned by hash, line endings aside:
     # the oracle's byte copies must stay v0.3.0's (git show

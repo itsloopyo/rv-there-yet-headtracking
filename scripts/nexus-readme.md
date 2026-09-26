@@ -18,10 +18,8 @@ Ride/
   Binaries/
     Win64/                   <- used by the Steam build
       dxgi.dll
-      HeadTracking.ini
     WinGDK/                  <- used by the Game Pass / Xbox build
       dxgi.dll
-      HeadTracking.ini
 LICENSE                      <- this mod's licence
 THIRD-PARTY-NOTICES.md       <- licences of everything built into dxgi.dll
 README.md                    <- this file
@@ -86,13 +84,22 @@ copy "C:\Windows\System32\dxgi.dll" "C:\XboxGames\RV There Yet\Content\Ride\Bina
 
 If both are installed, run both - each build needs its own copy.
 
-## Editing `HeadTracking.ini` on Game Pass / Xbox
+## Settings: `CameraUnlock.ini`
+
+The ZIP carries no settings file. The mod creates `CameraUnlock.ini` beside
+`dxgi.dll` the first time the game starts with it. Earlier versions kept their
+settings in `HeadTracking.ini` in the same folder: the first start that finds
+no `CameraUnlock.ini` reads your settings from `HeadTracking.ini` and writes
+them into `CameraUnlock.ini`, and never changes `HeadTracking.ini`. The
+settings themselves are described in the full README on GitHub.
+
+## Editing `CameraUnlock.ini` on Game Pass / Xbox
 
 The Xbox app folder ACLs can prevent a normal Notepad window from saving
 changes. Open Notepad as administrator, then open:
 
 ```cmd
-C:\XboxGames\RV There Yet\Content\Ride\Binaries\WinGDK\HeadTracking.ini
+C:\XboxGames\RV There Yet\Content\Ride\Binaries\WinGDK\CameraUnlock.ini
 ```
 
 If your game is installed elsewhere, replace `C:\XboxGames\RV There Yet\Content`
@@ -115,8 +122,10 @@ folder:
 
 - `dxgi.dll`
 - `dxgi_orig.dll`
-- `HeadTracking.ini`
 - `RVThereYetHeadTracking.log` (if present)
+
+`CameraUnlock.ini` holds your settings, and `HeadTracking.ini` those an
+earlier version used. Delete them too only if you want the settings gone.
 
 If you had a different `dxgi.dll` shim there before (ReShade, SpecialK,
 etc.), restore it from your own backup - the manual install doesn't
@@ -129,6 +138,10 @@ keep one.
 | Toggle tracking                 | `End`       | `Ctrl+Shift+Y` |
 | Cycle tracking mode             | `Page Up`   | `Ctrl+Shift+G` |
 | Toggle yaw mode (world / local) | `Page Down` | `Ctrl+Shift+H` |
+
+Each of these keys is a default you can change in `CameraUnlock.ini`. The
+tracking mode and the yaw mode are saved when you change them; the tracking
+toggle is not, and head tracking starts on or off as `EnableOnStartup` says.
 
 For configuration, OpenTrack setup, and troubleshooting, see the full
 README in the project's GitHub repo:

@@ -1,30 +1,15 @@
 #pragma once
 
-#include <string>
-#include <vector>
-
 #include "cameraunlock/unreal/ue_math.h"
 
 // Reticle / interaction-prompt compensation. The game draws its interaction
 // reticle + prompt at screen centre; with the view head-tracked, the clean-aim
 // point (where interaction actually happens) lands off-centre, so we move the
-// target widgets there via UMG SetRenderTranslation. All state is internal to
-// reticle.cpp; the view-builder hook drives it through this interface.
+// target widgets there via UMG SetRenderTranslation. It always follows the aim:
+// no setting turns it off. All state is internal to reticle.cpp; the
+// view-builder hook drives it through this interface.
 namespace RVThereYetHeadTracking::reticle
 {
-    struct Settings
-    {
-        bool  show = true;
-        float scale = 1.0f;
-        // Widget names to move to the aim point; empty keeps the built-in
-        // defaults (Crosshair, LookAtObjectName).
-        std::vector<std::string> targetNames;
-    };
-
-    // Called once from the bootstrap thread, before the view-builder hook is
-    // installed (everything else here runs on the render thread).
-    void Configure(const Settings& s);
-
     // One-line log of the resolved reticle config, for the bootstrap banner.
     void LogBootstrapSummary();
 

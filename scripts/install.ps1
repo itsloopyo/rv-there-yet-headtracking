@@ -17,7 +17,10 @@ Set-StrictMode -Version Latest
 # Deployment per install:
 #   1. Plant System32\dxgi.dll as dxgi_orig.dll (idempotent; existing copy kept)
 #   2. Back up any pre-existing dxgi.dll to dxgi.dll.backup (first install only)
-#   3. Copy dxgi.dll + HeadTracking.ini from plugins/ next to the exe
+#   3. Copy dxgi.dll from plugins/ next to the exe. No config is copied: the
+#      mod creates CameraUnlock.ini at its first launch, importing
+#      HeadTracking.ini, the file earlier versions read, while
+#      CameraUnlock.ini is absent.
 #   4. Write .headtracking-state.json at the install root
 #
 # If $GivenPath is supplied, it overrides detection and is treated as a single
@@ -115,7 +118,7 @@ if ($installs.Count -eq 0) {
     exit 1
 }
 
-# Source dir for the planted DLL + ini. Release ZIP: plugins/ sits next to
+# Source dir for the planted DLL. Release ZIP: plugins/ sits next to
 # install.ps1 ($scriptDir). Dev-tree fallback: $projectRoot/plugins.
 $srcDir = Join-Path $scriptDir 'plugins'
 if (-not (Test-Path $srcDir)) {
@@ -125,7 +128,6 @@ if (-not (Test-Path $srcDir)) {
     throw "plugins/ folder not found next to install.ps1. Installer ZIP is corrupt."
 }
 $dxgiProxy = Join-Path $srcDir 'dxgi.dll'
-$ini = Join-Path $srcDir 'HeadTracking.ini'
 if (-not (Test-Path $dxgiProxy)) { throw "dxgi.dll missing from plugins/. Installer ZIP is corrupt." }
 
 $systemDxgi = Join-Path $env:SystemRoot 'System32\dxgi.dll'
@@ -163,10 +165,7 @@ foreach ($install in $installs) {
     }
 
     # dxgi.dll is our proxy - always (re)deploy it, backing up any pre-existing
-    # file the first time. HeadTracking.ini is USER configuration - seed it only
-    # when absent so an update (install.cmd re-run) never wipes the user's tuned
-    # settings. The INI reader falls back to shipped defaults for any key a
-    # newer build adds, so keeping the old file loses nothing.
+    # file the first time.
     $dxgiSrc = Join-Path $srcDir 'dxgi.dll'
     $dxgiDst = Join-Path $exeDir 'dxgi.dll'
     if (Test-Path $dxgiSrc) {
@@ -179,17 +178,6 @@ foreach ($install in $installs) {
         }
         Copy-Item $dxgiSrc -Destination $dxgiDst -Force
         Write-Host "  Deployed dxgi.dll"
-    }
-
-    $iniSrc = Join-Path $srcDir 'HeadTracking.ini'
-    $iniDst = Join-Path $exeDir 'HeadTracking.ini'
-    if (Test-Path $iniSrc) {
-        if (Test-Path $iniDst) {
-            Write-Host "  Kept existing HeadTracking.ini (user config preserved)"
-        } else {
-            Copy-Item $iniSrc -Destination $iniDst -Force
-            Write-Host "  Deployed HeadTracking.ini"
-        }
     }
 
     # Version source: prefer install.cmd's MOD_VERSION (the file release.ps1

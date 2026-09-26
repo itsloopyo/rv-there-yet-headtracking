@@ -2,12 +2,14 @@
 #include "logging.h"
 #include "reticle.h"
 #include "position_boundary.h"
-#include "legacy_config/legacy_config.h"
+#include "config.h"
 
 #include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -18,8 +20,12 @@
 
 #include "cameraunlock/diagnostics/crash_handler.h"
 #include "cameraunlock/protocol/udp_receiver.h"
+#if RVTY_DEV_HOTKEYS
 #include "cameraunlock/input/chord_hotkeys.h"
+#endif
 #include "cameraunlock/input/hotkey_poller.h"
+#include "cameraunlock/input/key_binding_registration.h"
+#include "cameraunlock/input/key_bindings.h"
 #include "cameraunlock/hooks/hook_manager.h"
 #include "cameraunlock/processing/pose_interpolator.h"
 #include "cameraunlock/processing/position_interpolator.h"
@@ -30,6 +36,7 @@
 #include "cameraunlock/math/quat4.h"
 #include "cameraunlock/time/frame_clock.h"
 #include "cameraunlock/time/qpc_clock.h"
+#include "cameraunlock/tracking/tracking_mode.h"
 #include "cameraunlock/unreal/ue_math.h"
 #include "cameraunlock/unreal/ue_runtime.h"
 
@@ -62,8 +69,9 @@ namespace RVThereYetHeadTracking
         using ue::QuatMul;
         using ue::QuatToRotator;
         using ue::QuatRotateVec;
+#if RVTY_DEV_HOTKEYS
         using cameraunlock::input::ChordGuarded;
-        using cameraunlock::input::NavGuarded;
+#endif
         using cameraunlock::time::FrameClock;
 
         // ---- Runtime state ----
@@ -73,8 +81,9 @@ namespace RVThereYetHeadTracking
         std::atomic<bool> g_trackingEnabled{true};
         std::atomic<bool> g_worldSpaceYaw{true};
 
-        // Master rotation/position gates cycled by the tracking-mode hotkey:
-        //   0 normal (both), 1 rotation only, 2 position only.
+        // Master rotation/position gates cycled by the tracking-mode hotkey. The
+        // index is cameraunlock::TrackingMode's number: 0 normal (both), 1
+        // rotation only, 2 position only.
         std::atomic<bool> g_rotationEnabled{true};
         std::atomic<bool> g_positionEnabled{true};
         std::atomic<int>  g_trackingMode{0};
@@ -108,8 +117,6 @@ namespace RVThereYetHeadTracking
         // Tri-state: false/false is indistinguishable from a local tracker, so
         // a plain equality check never reports the (common) local case at all.
         bool  g_remoteConnectionKnown = false;
-        float g_yawSens = 1.0f, g_pitchSens = 1.0f, g_rollSens = 1.0f;
-        bool  g_invertYaw = false, g_invertPitch = false, g_invertRoll = false;
 
         // Position (6DOF) pipeline.
         cameraunlock::PositionProcessor   g_posProcessor;
@@ -168,9 +175,9 @@ namespace RVThereYetHeadTracking
                 g_smoothedPitch = cameraunlock::math::Smooth(g_smoothedPitch, interp.pitch, eff, dt);
                 g_smoothedRoll  = cameraunlock::math::Smooth(g_smoothedRoll,  interp.roll,  eff, dt);
             }
-            outYaw   = g_smoothedYaw   * (g_invertYaw   ? -g_yawSens   : g_yawSens);
-            outPitch = g_smoothedPitch * (g_invertPitch ? -g_pitchSens : g_pitchSens);
-            outRoll  = g_smoothedRoll  * (g_invertRoll  ? -g_rollSens  : g_rollSens);
+            outYaw   = g_smoothedYaw;
+            outPitch = g_smoothedPitch;
+            outRoll  = g_smoothedRoll;
             return true;
         }
 
@@ -447,65 +454,39 @@ namespace RVThereYetHeadTracking
             return path;
         }
 
-        std::string DllDirNarrow(void* hModule)
+        // Applies CameraUnlock.ini's settings to the session and returns them.
+        // The owner imports HeadTracking.ini, the file every earlier build read,
+        // while CameraUnlock.ini is absent, and never writes it.
+        Config LoadSettings(void* module)
         {
-            char buf[MAX_PATH] = {};
-            GetModuleFileNameA(static_cast<HMODULE>(hModule), buf, MAX_PATH);
-            std::string path(buf);
-            const auto slash = path.find_last_of("\\/");
-            if (slash != std::string::npos) path.resize(slash + 1);
-            return path;
-        }
+            std::wstring dllFolder = DllDir(module);
+            dllFolder.pop_back();
+            const Config settings = config::Load(dllFolder, cameraunlock::config::DefaultsFile::PerUser());
 
-        // Read HeadTracking.ini next to the DLL through the frozen reader in
-        // src/legacy_config/. Absent file / keys fall back to the shipped
-        // defaults. Returns the resolved UDP port and yaw-mode hotkey.
-        void LoadConfig(void* module, int& outPort, int& outYawModeKey)
-        {
-            legacy::Config read;
-            legacy::Load(DllDirNarrow(module) + "HeadTracking.ini", read);
+            g_trackingEnabled.store(settings.enable_on_startup);
+            g_localSmoothing  = settings.local_smoothing;
+            g_remoteSmoothing = settings.remote_smoothing;
+            g_worldSpaceYaw.store(settings.world_space_yaw);
+            const cameraunlock::TrackingMode mode = config::StartupTrackingMode(settings);
+            const cameraunlock::TrackingModeChannels channels = cameraunlock::EncodeTrackingMode(mode);
+            g_trackingMode.store(static_cast<int>(mode));
+            g_rotationEnabled.store(channels.rotation_enabled);
+            g_positionEnabled.store(channels.position_enabled);
 
-            outPort = read.udp_port;
-            outYawModeKey = read.yaw_mode_key;
-            g_trackingEnabled.store(read.enable_on_startup);
-            g_yawSens   = read.yaw_sensitivity;
-            g_pitchSens = read.pitch_sensitivity;
-            g_rollSens  = read.roll_sensitivity;
-            g_invertYaw   = read.invert_yaw;
-            g_invertPitch = read.invert_pitch;
-            g_invertRoll  = read.invert_roll;
-            g_localSmoothing  = read.local_smoothing;
-            g_remoteSmoothing = read.remote_smoothing;
-            g_worldSpaceYaw.store(read.world_space_yaw);
-
+            // The axis flips live in position_boundary.h, past the clamp, so the
+            // processor runs with no sensitivity or inversion of its own.
             cameraunlock::PositionSettings ps = g_posProcessor.GetSettings();
-            g_positionEnabled.store(read.position_enabled);
-            ps.sensitivity_x = read.position_sensitivity_x;
-            ps.sensitivity_y = read.position_sensitivity_y;
-            ps.sensitivity_z = read.position_sensitivity_z;
-            ps.invert_x = read.position_invert_x;
-            ps.invert_y = read.position_invert_y;
-            ps.invert_z = read.position_invert_z;
-            ps.limit_x = read.limit_x;
-            // The clamp is [-limit_y_down, +limit_y] and limit_y_down carries its own
-            // default, so mirror the one configured vertical limit the way
-            // PositionSettings::Symmetric does. Left unset, raising LimitY widened the
-            // upward budget only and downward travel stayed pinned at 0.20m.
-            ps.limit_y = read.limit_y;
-            ps.limit_y_down = read.limit_y;
-            ps.limit_z = read.limit_z;
-            ps.limit_z_back = read.limit_z_back;
-            // Position shares the [Tracking] smoothing parameters; the connection
-            // flag that picks between them lives on the processor.
-            ps.local_smoothing = g_localSmoothing;
-            ps.remote_smoothing = g_remoteSmoothing;
+            ps.limit_x      = settings.position_limit_x;
+            ps.limit_y      = settings.position_limit_y;
+            ps.limit_y_down = settings.position_limit_y_down;
+            ps.limit_z      = settings.position_limit_z;
+            ps.limit_z_back = settings.position_limit_z_back;
+            // Position shares the smoothing pair; the connection flag that picks
+            // between them lives on the processor.
+            ps.local_smoothing  = settings.local_smoothing;
+            ps.remote_smoothing = settings.remote_smoothing;
             g_posProcessor.SetSettings(ps);
-
-            reticle::Settings rs;
-            rs.show = read.show_reticle;
-            rs.scale = read.reticle_scale;
-            rs.targetNames = read.reticle_widget_names;
-            reticle::Configure(rs);
+            return settings;
         }
 
         // Off-thread gameplay detector. A gameplay HUD widget is live only
@@ -585,8 +566,8 @@ namespace RVThereYetHeadTracking
             Log::Line("build-check: PASS - matched profile %s",
                 builds::ActiveProfile().Name);
 
-            int udpPort = 0, yawModeKey = 0;
-            LoadConfig(module, udpPort, yawModeKey);
+            const Config settings = LoadSettings(module);
+            const int udpPort = settings.udp_port;
 
             g_receiver = std::make_unique<cameraunlock::UdpReceiver>();
             g_receiver->SetLog([](const std::string& msg) { Log::Line("[udp] %s", msg.c_str()); });
@@ -599,35 +580,45 @@ namespace RVThereYetHeadTracking
                 g_trackingEnabled.store(now);
                 Log::Line("Tracking toggled: %s", now ? "ON" : "OFF");
             };
-            // Three-state tracking-mode cycle:
-            //   0 normal (rotation + position), 1 rotation only, 2 position only.
+            // Three-state tracking-mode cycle: rotation + position, rotation
+            // only, position only, and back. Each step is saved.
             const auto cycleTrackingMode = []() {
                 const int next = (g_trackingMode.load() + 1) % 3;
                 g_trackingMode.store(next);
-                g_rotationEnabled.store(next != 2);
-                g_positionEnabled.store(next != 1);
+                const auto mode = static_cast<cameraunlock::TrackingMode>(next);
+                const cameraunlock::TrackingModeChannels channels = cameraunlock::EncodeTrackingMode(mode);
+                g_rotationEnabled.store(channels.rotation_enabled);
+                g_positionEnabled.store(channels.position_enabled);
                 static const char* names[] = {
                     "NORMAL (rotation + position)",
                     "ROTATION ONLY (position off)",
                     "POSITION ONLY (rotation off)"
                 };
                 Log::Line("tracking-mode -> %d  (%s)", next, names[next]);
+                config::SaveTrackingMode(mode);
             };
             const auto toggleYawMode = []() {
                 const bool now = !g_worldSpaceYaw.load();
                 g_worldSpaceYaw.store(now);
                 Log::Line("yaw-mode -> %s", now ? "WORLD (horizon-locked)" : "LOCAL (camera-local)");
+                config::SaveWorldSpaceYaw(now);
             };
 
-            // Toggle tracking: End / Ctrl+Shift+Y
-            g_hotkeys->SetToggleKey(VK_END, NavGuarded(toggleTracking));
-            g_hotkeys->AddHotkey(0x59 /* Y */, ChordGuarded(toggleTracking));
-            // Cycle tracking mode: Page Up / Ctrl+Shift+G
-            g_hotkeys->AddHotkey(VK_PRIOR, NavGuarded(cycleTrackingMode));
-            g_hotkeys->AddHotkey(0x47 /* G */, ChordGuarded(cycleTrackingMode));
-            // Yaw mode (world/local): Page Down (or [Hotkeys] ToggleYawMode) / Ctrl+Shift+H
-            g_hotkeys->AddHotkey(yawModeKey, NavGuarded(toggleYawMode));
-            g_hotkeys->AddHotkey(0x48 /* H */, ChordGuarded(toggleYawMode));
+            // Every action's keys come from its list in CameraUnlock.ini, the
+            // Ctrl+Shift chords included, so each is rebindable. The table's
+            // hotkey codec lets only a list ParseKeyBindings reads into the
+            // settings.
+            const auto registerList = [](const std::string& list, std::function<void()> action) {
+                cameraunlock::input::KeyBindingsParseResult parsed = cameraunlock::input::ParseKeyBindings(list);
+                if (!parsed.ok()) throw std::logic_error("hotkey list '" + list + "': " + parsed.error);
+                cameraunlock::input::RegisterKeyBindings(*g_hotkeys, parsed.bindings, std::move(action));
+            };
+            registerList(settings.toggle_key, toggleTracking);
+            registerList(settings.cycle_tracking_mode_key, cycleTrackingMode);
+            registerList(settings.yaw_mode_key, toggleYawMode);
+            Log::Line("hotkeys: toggle=[%s] cycle tracking mode=[%s] yaw mode=[%s]",
+                settings.toggle_key.c_str(), settings.cycle_tracking_mode_key.c_str(),
+                settings.yaw_mode_key.c_str());
 #if RVTY_DEV_HOTKEYS
             // Diagnostic widget dump: Ctrl+Shift+U (press near an interaction
             // prompt so its widget is live). Off the render path.

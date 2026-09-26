@@ -4,10 +4,11 @@
 # Run with:  Invoke-Pester -Path tests/Uninstall.Tests.ps1
 #
 # Focus: the restore path must NOT delete a file it just restored from .backup.
-# Before the fix, uninstall restored the user's pre-mod dxgi.dll/HeadTracking.ini
-# from .backup and then immediately deleted it (the "does a .backup still exist?"
-# guard was evaluated after the backup had already been consumed), destroying the
-# user's original file.
+# Before the fix, uninstall restored the user's pre-mod dxgi.dll from .backup
+# and then immediately deleted it (the "does a .backup still exist?" guard was
+# evaluated after the backup had already been consumed), destroying the user's
+# original file. The player's settings, CameraUnlock.ini and the
+# HeadTracking.ini earlier versions read, survive an uninstall.
 
 $repoRoot     = Split-Path -Parent $PSScriptRoot
 $uninstallPs1 = Join-Path $repoRoot 'scripts/uninstall.ps1'
@@ -104,6 +105,24 @@ Describe 'uninstall.ps1 restore-from-backup' {
             (Test-Path (Join-Path $exeDir 'winmm.dll'))     | Should Be $false
             (Test-Path (Join-Path $exeDir 'dinput8.dll'))   | Should Be $false
             (Test-Path (Join-Path $exeDir 'xinput1_3.dll')) | Should Be $false
+        } finally {
+            Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'keeps CameraUnlock.ini and HeadTracking.ini' {
+        $root = Join-Path $env:TEMP ("rvty-uninst-{0}" -f ([guid]::NewGuid()))
+        try {
+            $exeDir = New-FakeInstall -Root $root
+            Set-Content -Path (Join-Path $exeDir 'dxgi.dll')         -Value 'our-proxy'   -NoNewline
+            Set-Content -Path (Join-Path $exeDir 'CameraUnlock.ini') -Value 'settings'    -NoNewline
+            Set-Content -Path (Join-Path $exeDir 'HeadTracking.ini') -Value 'old-settings' -NoNewline
+
+            Invoke-Uninstall -GivenPath $root -Force
+
+            (Test-Path (Join-Path $exeDir 'dxgi.dll')) | Should Be $false
+            (Get-Content -Raw (Join-Path $exeDir 'CameraUnlock.ini')) | Should Be 'settings'
+            (Get-Content -Raw (Join-Path $exeDir 'HeadTracking.ini')) | Should Be 'old-settings'
         } finally {
             Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
         }
