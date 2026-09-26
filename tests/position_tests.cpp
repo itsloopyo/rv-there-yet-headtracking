@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <fstream>
 #include <string>
+#include <utility>
 
 #include "position_boundary.h"
 
@@ -86,6 +87,47 @@ void LeanBudgetsAreNotReversed() {
               "backward lean gets the LimitZBack budget");
 }
 
+// Negating the processor's output on an axis is the same as flipping that
+// axis's inversion and swapping its two limits, bit for bit, smoothing
+// included. The config differential test relies on it to write down a reading
+// whose axis code did not negate sway and surge in the frame of the axis code
+// that does (tests/config_differential/differential_tests.cpp).
+void NegatingAnAxisIsFlippingItsInversionAndSwappingItsLimits() {
+    cameraunlock::PositionSettings a;
+    a.sensitivity_x = 1.3f;
+    a.sensitivity_y = 0.7f;
+    a.sensitivity_z = 1.1f;
+    a.limit_x = 0.25f;
+    a.limit_y = 0.30f;
+    a.limit_y_down = 0.12f;
+    a.limit_z = 0.10f;
+    a.limit_z_back = 0.40f;
+    a.local_smoothing = 0.35f;
+    a.invert_x = true;
+    a.invert_z = true;
+
+    cameraunlock::PositionSettings b = a;
+    b.invert_x = !a.invert_x;
+    b.invert_y = !a.invert_y;
+    std::swap(b.limit_y, b.limit_y_down);
+    b.invert_z = !a.invert_z;
+    std::swap(b.limit_z, b.limit_z_back);
+
+    cameraunlock::PositionProcessor pa, pb;
+    pa.SetSettings(a);
+    pb.SetSettings(b);
+    const float inputs[][3] = {{0.05f, -0.02f, -0.3f}, {0.6f, 0.4f, 0.8f}, {-0.2f, -0.5f, -0.9f},
+                               {0.01f, 0.03f, 0.05f}, {-1.0f, 1.0f, 0.2f}, {0.0f, 0.0f, 0.0f}};
+    bool same = true;
+    for (const auto& in : inputs) {
+        const cameraunlock::PositionData raw(in[0], in[1], in[2]);
+        const cameraunlock::math::Vec3 oa = pa.Process(raw, cameraunlock::math::Quat4::Identity(), 0.016f);
+        const cameraunlock::math::Vec3 ob = pb.Process(raw, cameraunlock::math::Quat4::Identity(), 0.016f);
+        same = same && -oa.x == ob.x && -oa.y == ob.y && -oa.z == ob.z;
+    }
+    Check(same, "negating every axis equals flipping each inversion and swapping each axis's limits");
+}
+
 // Minimal reader for the shipped file: last "key = value" wins, sections are
 // tracked so [Position] keys are not confused with same-named ones elsewhere.
 std::string ReadIniValue(const char* section, const char* key) {
@@ -153,6 +195,7 @@ void ShippedIniMatchesCodeDefaults() {
 int main() {
     ForwardLeanMovesViewForward();
     LeanBudgetsAreNotReversed();
+    NegatingAnAxisIsFlippingItsInversionAndSwappingItsLimits();
     ShippedIniMatchesCodeDefaults();
 
     if (g_failures != 0) {

@@ -97,10 +97,12 @@ add_library(${MOD_NAME} SHARED
     src/RVThereYetHeadTracking/builds/build_registry.cpp
     src/RVThereYetHeadTracking/builds/steam_offsets.cpp
     src/RVThereYetHeadTracking/builds/gdk_offsets.cpp
+    src/legacy_config/legacy_config.cpp
 )
 
 target_include_directories(${MOD_NAME} PRIVATE
     src/RVThereYetHeadTracking
+    src
 )
 
 target_compile_definitions(${MOD_NAME} PRIVATE
@@ -138,8 +140,10 @@ set_target_properties(${MOD_NAME} PROPERTIES
 # Behaviour lock for the lean boundary and for the shipped INI agreeing with
 # the code defaults. A separate executable linking none of the hook machinery,
 # so `pixi run test` runs anywhere the mod builds, with no game installed.
-option(RVTY_BUILD_TESTS "Build the position behaviour tests" ON)
+option(RVTY_BUILD_TESTS "Build the position behaviour tests and the config differential test" ON)
 if(RVTY_BUILD_TESTS)
+    enable_testing()
+
     add_executable(rvty_position_tests tests/position_tests.cpp)
     target_include_directories(rvty_position_tests PRIVATE
         src/RVThereYetHeadTracking
@@ -148,4 +152,92 @@ if(RVTY_BUILD_TESTS)
     target_compile_definitions(rvty_position_tests PRIVATE
         RVTY_SHIPPED_INI="${CMAKE_CURRENT_SOURCE_DIR}/HeadTracking.ini"
     )
+    add_test(NAME rvty_position_tests COMMAND rvty_position_tests)
+
+    # The canonical config conversion's differential test: v0.3.0's reader and
+    # startup code (the oracle, transcribed in tests/config_differential/oracle)
+    # against the frozen reader in src/legacy_config/. The oracle is compiled on
+    # its own with the mod's and core's namespaces renamed, against byte copies
+    # of the core headers v0.3.0's pin (3465659) had that core has changed since,
+    # so it links beside today's code and nothing in it can resolve to a symbol of
+    # the mod under test.
+    set(RVTY_DIFFERENTIAL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/tests/config_differential)
+    add_library(rvty_config_oracle STATIC
+        ${RVTY_DIFFERENTIAL_DIR}/oracle/oracle_reader.cpp
+        cameraunlock-core/cpp/src/config/ini_reader.cpp
+        cameraunlock-core/cpp/src/logging/file_log.cpp
+    )
+    target_include_directories(rvty_config_oracle PRIVATE
+        ${RVTY_DIFFERENTIAL_DIR}/oracle
+        ${RVTY_DIFFERENTIAL_DIR}/oracle/core
+        cameraunlock-core/cpp/include
+    )
+    target_compile_definitions(rvty_config_oracle PRIVATE
+        RVThereYetHeadTracking=rvty_oracle_mod
+        cameraunlock=rvty_oracle_core
+    )
+
+    add_executable(rvty_config_differential
+        ${RVTY_DIFFERENTIAL_DIR}/differential_tests.cpp
+        src/legacy_config/legacy_config.cpp
+    )
+    target_include_directories(rvty_config_differential PRIVATE
+        src
+        src/RVThereYetHeadTracking
+        ${RVTY_DIFFERENTIAL_DIR}
+        cameraunlock-core/cpp/include
+    )
+    target_compile_definitions(rvty_config_differential PRIVATE
+        RVTY_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+    target_link_libraries(rvty_config_differential PRIVATE rvty_config_oracle cameraunlock)
+    if(MSVC)
+        target_compile_options(rvty_config_differential PRIVATE /W4 /WX /EHsc)
+    endif()
+    add_test(NAME rvty_config_differential COMMAND rvty_config_differential)
+
+    # What the differential test compiles is pinned by hash, line endings aside:
+    # the oracle's byte copies must stay v0.3.0's (git show
+    # v0.3.0:src/RVThereYetHeadTracking/logging.h, and git -C cameraunlock-core
+    # show 3465659:cpp/include/cameraunlock/<path> for core/), the core sources
+    # both readers compile must stay the ones v0.3.0 was built with, and the
+    # frozen reader is never edited.
+    function(rvty_require_hash path expected)
+        file(READ "${path}" text)
+        string(REPLACE "\r" "" text "${text}")
+        string(SHA256 actual "${text}")
+        if(NOT actual STREQUAL expected)
+            message(FATAL_ERROR "${path} has changed (SHA-256 of its text ${actual}, pinned "
+                                "${expected}). The config differential test compares against "
+                                "exactly this file; see CMakeLists.txt.")
+        endif()
+    endfunction()
+    set(RVTY_ORACLE_CORE ${RVTY_DIFFERENTIAL_DIR}/oracle/core/cameraunlock)
+    set(RVTY_CORE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/cameraunlock-core/cpp)
+    foreach(pinned
+            "${RVTY_DIFFERENTIAL_DIR}/oracle/src/logging.h|90d47b8031a42e0811f4fbb4d30228a2cab387dc88047b6237080248ca3bc0e2"
+            "${RVTY_ORACLE_CORE}/data/position_settings.h|ccd022e0f63bfe6cde243f2769b803bfa7d0ead6f77118874fa6c57961021a89"
+            "${RVTY_ORACLE_CORE}/processing/position_processor.h|9a4857ba41117a058a87fd95784a29067d370f9fa118377059ee3359591ce92f"
+            "${RVTY_ORACLE_CORE}/protocol/udp_receiver.h|fc7cc79943103264b9964bb77625f7ee3d848bcc634fbf1181cb8c54faca17db"
+            "${RVTY_ORACLE_CORE}/protocol/socket_types.h|0dc7e23ae364dc12216604070a52f60811bb18e35f591d38b4ecdd0a655eb627"
+            "${RVTY_ORACLE_CORE}/protocol/udp_socket.h|e3b07fba03de6942c4e6eec696dcd08f3931849994edb46fc297dc5ee479df34"
+            "${RVTY_CORE_DIR}/include/cameraunlock/config/ini_reader.h|a7ffb44210ff59672fa97e8e5feaa2cb3e81938fcc0334a384c68bc371b3857a"
+            "${RVTY_CORE_DIR}/src/config/ini_reader.cpp|e01515c2656aaf533bae4350dc45b702c3e3d4043935743dcc9bd5ea581fbe1c"
+            "${RVTY_CORE_DIR}/include/cameraunlock/logging/file_log.h|43bdd2ef8554c78e5f440333463750c13b95110fe672b0b6e273244df9e7d169"
+            "${RVTY_CORE_DIR}/src/logging/file_log.cpp|73c53c2baa06bbfebe8211f62678aa2b60cb95f604743d3686951ba56b87ea47"
+            "${RVTY_CORE_DIR}/include/cameraunlock/math/smoothing_utils.h|fc2146f8c585e5f610c7234e302f59de4945679cfa28ff479ca47477ec073f22"
+            "${RVTY_CORE_DIR}/include/cameraunlock/math/angle_utils.h|d7a905270933e3cb0c4c361d29d3fd701655498cbcd1875ea79d180468bdbe6a"
+            "${RVTY_CORE_DIR}/include/cameraunlock/math/vec3.h|021c45902da44d12911a7cacd9b76fa28775b382583dca2e5e9df3888e242683"
+            "${RVTY_CORE_DIR}/include/cameraunlock/math/quat4.h|e390c99092abd55f4296f573e0e537638c1f4f21cecfac34e0c0a50c44f7486e"
+            "${RVTY_CORE_DIR}/include/cameraunlock/data/position_data.h|f97388fa6ec0ca02e0fa7c4eeb26579bcaecbb5d56f88d90be59a9e66689ba7d"
+            "${RVTY_CORE_DIR}/include/cameraunlock/data/tracking_pose.h|7cdb1ad02461e4cf37d3f2e2f9eedde12a9ed3238a61f8906302596589d2f629"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/RVThereYetHeadTracking/logging.h|90d47b8031a42e0811f4fbb4d30228a2cab387dc88047b6237080248ca3bc0e2"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/legacy_config/legacy_config.h|4d50091893e710c0bf7c568e3863bdb7927f43b483d08332ba9134d9f5b1afbf"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/legacy_config/legacy_config.cpp|76fdf6980aa6d714480c2ea71c5400162f77f156852cc3da4426e00694e7db08")
+        string(REPLACE "|" ";" pair "${pinned}")
+        list(GET pair 0 pinned_path)
+        list(GET pair 1 pinned_hash)
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${pinned_path}")
+        rvty_require_hash("${pinned_path}" "${pinned_hash}")
+    endforeach()
 endif()

@@ -2,6 +2,7 @@
 #include "logging.h"
 #include "reticle.h"
 #include "position_boundary.h"
+#include "legacy_config/legacy_config.h"
 
 #include <atomic>
 #include <cmath>
@@ -15,7 +16,6 @@
 
 #include "builds/build_registry.h"
 
-#include "cameraunlock/config/ini_reader.h"
 #include "cameraunlock/diagnostics/crash_handler.h"
 #include "cameraunlock/protocol/udp_receiver.h"
 #include "cameraunlock/input/chord_hotkeys.h"
@@ -457,118 +457,44 @@ namespace RVThereYetHeadTracking
             return path;
         }
 
-        // strtod accepts "nan"/"inf" and out-of-float-range values; a
-        // non-finite sensitivity/limit would flow into the view rotation we
-        // write back to the game every frame and poison it with NaN. Same
-        // config-boundary rule as the Port check: fall back with a loud log.
-        float ReadFiniteFloat(const cameraunlock::IniReader& ini,
-                              const char* section, const char* key, float def)
-        {
-            const float v = ini.ReadFloat(section, key, def);
-            if (!std::isfinite(v)) {
-                Log::Line("config: %s.%s is not a finite number; using default %.2f",
-                    section, key, def);
-                return def;
-            }
-            return v;
-        }
-
-        void WarnRetiredVerticalScaleKey(const cameraunlock::IniReader& ini)
-        {
-            static bool warned = false;
-            if (warned) return;
-            if (ini.ReadString("Reticle", "VerticalScale", "").empty()) return;
-            warned = true;
-            Log::Line("config: key [Reticle] VerticalScale has been retired and is IGNORED. "
-                "It existed to correct a projection that used the wrong vertical term; "
-                "the reticle now projects through the shared Hor+ model and needs no "
-                "per-axis correction. Remove the key.");
-        }
-
-        // Warned once per process rather than once per load: config is
-        // reloadable, and repeating this on every reload buries it.
-        //
-        // The old value is deliberately NOT migrated into the new keys. The
-        // single smoothing value carried a hidden 0.15 floor, so the number in
-        // an existing config does not mean what it used to: copying it across
-        // would hand a local user smoothing they never chose under the new
-        // semantics, and copying it into only one of the two keys would be a
-        // guess about which connection they were on.
-        void WarnRetiredSmoothingKey(const cameraunlock::IniReader& ini,
-                                     const char* section, const char* key)
-        {
-            static bool warned = false;
-            if (warned) return;
-            if (ini.ReadString(section, key, "").empty()) return;
-            warned = true;
-            Log::Line("config: key [%s] %s has been retired and is IGNORED. Smoothing is "
-                "now two keys: LocalSmoothing (default 0, applies to a tracker on this "
-                "machine) and RemoteSmoothing (default 0.15, applies to a tracker on the "
-                "network). The old value is not migrated because the semantics changed - "
-                "it carried a hidden 0.15 floor that no longer exists. Set the two new "
-                "keys.",
-                section, key);
-        }
-
-        // Read HeadTracking.ini next to the DLL. Absent file / keys fall back
-        // to the shipped defaults (a filesystem boundary, so defaults here are
-        // correct). Returns the resolved UDP port and yaw-mode hotkey.
+        // Read HeadTracking.ini next to the DLL through the frozen reader in
+        // src/legacy_config/. Absent file / keys fall back to the shipped
+        // defaults. Returns the resolved UDP port and yaw-mode hotkey.
         void LoadConfig(void* module, int& outPort, int& outYawModeKey)
         {
-            outPort = cameraunlock::UdpReceiver::kDefaultPort;
-            outYawModeKey = 0x22;  // Page Down
+            legacy::Config read;
+            legacy::Load(DllDirNarrow(module) + "HeadTracking.ini", read);
 
-            cameraunlock::IniReader ini;
-            if (!ini.Open(DllDirNarrow(module) + "HeadTracking.ini")) {
-                Log::Line("config: no HeadTracking.ini next to DLL; using defaults");
-                return;
-            }
-
-            const int cfgPort = ini.ReadInt("Network", "Port", outPort);
-            // Port is later narrowed to uint16 for bind(); an out-of-range value
-            // would wrap silently and the mod would bind a different port than the
-            // user asked for, then appear "loaded but receiving nothing". Validate
-            // at this config boundary and fall back to the default with a loud log.
-            if (cfgPort < 1 || cfgPort > 65535) {
-                Log::Line("config: Port=%d out of range 1-65535; using default %d",
-                    cfgPort, outPort);
-            } else {
-                outPort = cfgPort;
-            }
-            g_trackingEnabled.store(ini.ReadBool("Tracking", "EnableOnStartup", true));
-            g_yawSens   = ReadFiniteFloat(ini, "Tracking", "YawSensitivity", 1.0f);
-            g_pitchSens = ReadFiniteFloat(ini, "Tracking", "PitchSensitivity", 1.0f);
-            g_rollSens  = ReadFiniteFloat(ini, "Tracking", "RollSensitivity", 1.0f);
-            g_invertYaw   = ini.ReadBool("Tracking", "InvertYaw", false);
-            g_invertPitch = ini.ReadBool("Tracking", "InvertPitch", false);
-            g_invertRoll  = ini.ReadBool("Tracking", "InvertRoll", false);
-            g_localSmoothing  = ReadFiniteFloat(ini, "Tracking", "LocalSmoothing",
-                static_cast<float>(cameraunlock::math::kDefaultLocalSmoothing));
-            g_remoteSmoothing = ReadFiniteFloat(ini, "Tracking", "RemoteSmoothing",
-                static_cast<float>(cameraunlock::math::kDefaultRemoteSmoothing));
-            WarnRetiredSmoothingKey(ini, "Tracking", "Smoothing");
-            WarnRetiredSmoothingKey(ini, "Position", "Smoothing");
-            g_worldSpaceYaw.store(ini.ReadBool("Tracking", "WorldSpaceYaw", true));
-            outYawModeKey = ini.ReadHex("Hotkeys", "ToggleYawMode", outYawModeKey);
+            outPort = read.udp_port;
+            outYawModeKey = read.yaw_mode_key;
+            g_trackingEnabled.store(read.enable_on_startup);
+            g_yawSens   = read.yaw_sensitivity;
+            g_pitchSens = read.pitch_sensitivity;
+            g_rollSens  = read.roll_sensitivity;
+            g_invertYaw   = read.invert_yaw;
+            g_invertPitch = read.invert_pitch;
+            g_invertRoll  = read.invert_roll;
+            g_localSmoothing  = read.local_smoothing;
+            g_remoteSmoothing = read.remote_smoothing;
+            g_worldSpaceYaw.store(read.world_space_yaw);
 
             cameraunlock::PositionSettings ps = g_posProcessor.GetSettings();
-            g_positionEnabled.store(ini.ReadBool("Position", "Enabled", true));
-            namespace pd = rvty::position;
-            ps.sensitivity_x = ReadFiniteFloat(ini, "Position", "SensitivityX", pd::kSensitivityX);
-            ps.sensitivity_y = ReadFiniteFloat(ini, "Position", "SensitivityY", pd::kSensitivityY);
-            ps.sensitivity_z = ReadFiniteFloat(ini, "Position", "SensitivityZ", pd::kSensitivityZ);
-            ps.invert_x = ini.ReadBool("Position", "InvertX", pd::kInvertX);
-            ps.invert_y = ini.ReadBool("Position", "InvertY", pd::kInvertY);
-            ps.invert_z = ini.ReadBool("Position", "InvertZ", pd::kInvertZ);
-            ps.limit_x = ReadFiniteFloat(ini, "Position", "LimitX", pd::kLimitX);
+            g_positionEnabled.store(read.position_enabled);
+            ps.sensitivity_x = read.position_sensitivity_x;
+            ps.sensitivity_y = read.position_sensitivity_y;
+            ps.sensitivity_z = read.position_sensitivity_z;
+            ps.invert_x = read.position_invert_x;
+            ps.invert_y = read.position_invert_y;
+            ps.invert_z = read.position_invert_z;
+            ps.limit_x = read.limit_x;
             // The clamp is [-limit_y_down, +limit_y] and limit_y_down carries its own
             // default, so mirror the one configured vertical limit the way
             // PositionSettings::Symmetric does. Left unset, raising LimitY widened the
             // upward budget only and downward travel stayed pinned at 0.20m.
-            ps.limit_y = ReadFiniteFloat(ini, "Position", "LimitY", pd::kLimitY);
-            ps.limit_y_down = ps.limit_y;
-            ps.limit_z = ReadFiniteFloat(ini, "Position", "LimitZ", pd::kLimitZ);
-            ps.limit_z_back = ReadFiniteFloat(ini, "Position", "LimitZBack", pd::kLimitZBack);
+            ps.limit_y = read.limit_y;
+            ps.limit_y_down = read.limit_y;
+            ps.limit_z = read.limit_z;
+            ps.limit_z_back = read.limit_z_back;
             // Position shares the [Tracking] smoothing parameters; the connection
             // flag that picks between them lives on the processor.
             ps.local_smoothing = g_localSmoothing;
@@ -576,35 +502,10 @@ namespace RVThereYetHeadTracking
             g_posProcessor.SetSettings(ps);
 
             reticle::Settings rs;
-            rs.show = ini.ReadBool("Tracking", "ShowReticle", true);
-            rs.scale = ReadFiniteFloat(ini, "Reticle", "Scale", 1.0f);
-            WarnRetiredVerticalScaleKey(ini);
-            // Comma-separated widget names to move to the aim point; empty
-            // keeps the built-in defaults.
-            const std::string names = ini.ReadString("Reticle", "WidgetNames", "");
-            if (!names.empty()) {
-                std::size_t start = 0;
-                while (start <= names.size()) {
-                    std::size_t comma = names.find(',', start);
-                    std::string tok = names.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
-                    std::size_t a = tok.find_first_not_of(" \t");
-                    std::size_t b = tok.find_last_not_of(" \t");
-                    if (a != std::string::npos) rs.targetNames.push_back(tok.substr(a, b - a + 1));
-                    if (comma == std::string::npos) break;
-                    start = comma + 1;
-                }
-            }
+            rs.show = read.show_reticle;
+            rs.scale = read.reticle_scale;
+            rs.targetNames = read.reticle_widget_names;
             reticle::Configure(rs);
-
-            Log::Line("config: port=%d enable=%s sens(Y/P/R)=%.2f/%.2f/%.2f "
-                "invert(Y/P/R)=%d/%d/%d localSmoothing=%.2f remoteSmoothing=%.2f "
-                "worldYaw=%s position=%s",
-                outPort, g_trackingEnabled.load() ? "true" : "false",
-                g_yawSens, g_pitchSens, g_rollSens,
-                g_invertYaw, g_invertPitch, g_invertRoll,
-                g_localSmoothing, g_remoteSmoothing,
-                g_worldSpaceYaw.load() ? "true" : "false",
-                g_positionEnabled.load() ? "true" : "false");
         }
 
         // Off-thread gameplay detector. A gameplay HUD widget is live only

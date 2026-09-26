@@ -1,0 +1,30 @@
+# What the differential test compares, and where each file came from.
+# Columns: role, source (commit:path, or the path in this repo), sha256 of the text with CR removed.
+# v0.3.0 (commit 804ebb2, tag object 964c3d7) is the newest published build. The rolling dev
+# pre-release (0.0.0-nightly.20260705.14ea55b) and v0.1.0 and v0.2.0 are older, and no predecessor
+# repo shipped this mod. v0.3.0 pinned core 3465659. The reader was frozen at 0bef86a; commits
+# 5341862 and 2c2cd83 between the two change what a file does, and differential_tests.cpp lists both.
+published reader	v0.3.0:src/RVThereYetHeadTracking/headtracking_mod.cpp, transcribed in tests/config_differential/oracle/oracle_reader.cpp	f6907bd73a702fef3b0f04e0b62cf2d41c695dca9d13377ea2122b884db169f6
+published reader	v0.3.0:src/RVThereYetHeadTracking/reticle.h, transcribed in tests/config_differential/oracle/oracle_reader.cpp	0d4d058948776b31a6ceea5bca5a5f35ad0548ef79ac968940c157f4df7cb23a
+published reader	v0.3.0:src/RVThereYetHeadTracking/logging.h, copied to tests/config_differential/oracle/src/logging.h	90d47b8031a42e0811f4fbb4d30228a2cab387dc88047b6237080248ca3bc0e2
+published core source	cameraunlock-core 3465659:cpp/include/cameraunlock/data/position_settings.h, copied to oracle/core/	ccd022e0f63bfe6cde243f2769b803bfa7d0ead6f77118874fa6c57961021a89
+published core source	cameraunlock-core 3465659:cpp/include/cameraunlock/processing/position_processor.h, copied to oracle/core/	9a4857ba41117a058a87fd95784a29067d370f9fa118377059ee3359591ce92f
+published core source	cameraunlock-core 3465659:cpp/include/cameraunlock/protocol/udp_receiver.h, copied to oracle/core/	fc7cc79943103264b9964bb77625f7ee3d848bcc634fbf1181cb8c54faca17db
+published core source	cameraunlock-core 3465659:cpp/include/cameraunlock/protocol/socket_types.h, copied to oracle/core/	0dc7e23ae364dc12216604070a52f60811bb18e35f591d38b4ecdd0a655eb627
+published core source	cameraunlock-core 3465659:cpp/include/cameraunlock/protocol/udp_socket.h, copied to oracle/core/	e3b07fba03de6942c4e6eec696dcd08f3931849994edb46fc297dc5ee479df34
+published core source, same at the pin	cameraunlock-core 3465659:cpp/include/cameraunlock/config/ini_reader.h	a7ffb44210ff59672fa97e8e5feaa2cb3e81938fcc0334a384c68bc371b3857a
+published core source, same at the pin	cameraunlock-core 3465659:cpp/src/config/ini_reader.cpp	e01515c2656aaf533bae4350dc45b702c3e3d4043935743dcc9bd5ea581fbe1c
+published core source, same at the pin	cameraunlock-core 3465659:cpp/include/cameraunlock/logging/file_log.h	43bdd2ef8554c78e5f440333463750c13b95110fe672b0b6e273244df9e7d169
+published core source, same at the pin	cameraunlock-core 3465659:cpp/src/logging/file_log.cpp	73c53c2baa06bbfebe8211f62678aa2b60cb95f604743d3686951ba56b87ea47
+published core source, same at the pin	cameraunlock-core 3465659:cpp/include/cameraunlock/math/smoothing_utils.h	fc2146f8c585e5f610c7234e302f59de4945679cfa28ff479ca47477ec073f22
+published core source, same at the pin	cameraunlock-core 3465659:cpp/include/cameraunlock/math/angle_utils.h	d7a905270933e3cb0c4c361d29d3fd701655498cbcd1875ea79d180468bdbe6a
+published core source, same at the pin	cameraunlock-core 3465659:cpp/include/cameraunlock/math/vec3.h	021c45902da44d12911a7cacd9b76fa28775b382583dca2e5e9df3888e242683
+published core source, same at the pin	cameraunlock-core 3465659:cpp/include/cameraunlock/math/quat4.h	e390c99092abd55f4296f573e0e537638c1f4f21cecfac34e0c0a50c44f7486e
+published core source, same at the pin	cameraunlock-core 3465659:cpp/include/cameraunlock/data/position_data.h	f97388fa6ec0ca02e0fa7c4eeb26579bcaecbb5d56f88d90be59a9e66689ba7d
+published core source, same at the pin	cameraunlock-core 3465659:cpp/include/cameraunlock/data/tracking_pose.h	7cdb1ad02461e4cf37d3f2e2f9eedde12a9ed3238a61f8906302596589d2f629
+frozen from	0bef86a:src/RVThereYetHeadTracking/headtracking_mod.cpp	f68a3b399dc95fc46cce116a1f79eea6a9ae0a271d07a2e7e8f1f4fadc6a1acc
+frozen reader	src/legacy_config/legacy_config.h	4d50091893e710c0bf7c568e3863bdb7927f43b483d08332ba9134d9f5b1afbf
+frozen reader	src/legacy_config/legacy_config.cpp	76fdf6980aa6d714480c2ea71c5400162f77f156852cc3da4426e00694e7db08
+frozen reader	src/RVThereYetHeadTracking/logging.h, the same bytes as v0.3.0's	90d47b8031a42e0811f4fbb4d30228a2cab387dc88047b6237080248ca3bc0e2
+input	14ea55b:HeadTracking.ini, plugins/HeadTracking.ini in the dev, v0.1.0 and v0.2.0 installer ZIPs and Ride/Binaries/{Win64,WinGDK}/HeadTracking.ini in the v0.1.0 and v0.2.0 Nexus ZIPs	ddd40e2dc8ba6a9121b09292ec08551af0bca4357300d268fa9228c371cf09bd
+input	843a516:HeadTracking.ini, shipped in the v0.3.0 installer and Nexus ZIPs	ebabd2974c22b63eeca4af94adb8b10f74ea7cc21e54954e3b3ba112ae832a26
