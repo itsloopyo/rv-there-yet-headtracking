@@ -38,6 +38,16 @@ const std::vector<std::string> kBuiltInReticleWidgets = {"Crosshair", "LookAtObj
 
 std::unique_ptr<cfg::ConfigOwner<Config>> g_owner;
 
+struct DepthLimits {
+    float forward;
+    float back;
+};
+
+DepthLimits DepthLimitsOf(const legacy::Config& read) {
+    const bool depth_flipped = read.position_invert_z != (read.position_sensitivity_z < 0.0f);
+    return depth_flipped ? DepthLimits{read.limit_z_back, read.limit_z} : DepthLimits{read.limit_z, read.limit_z_back};
+}
+
 void Save(const char* rows, const std::function<void(Config&)>& change) {
     const cfg::ConfigSaveResult result = g_owner->Save(change);
     if (result.status != cfg::ConfigSaveStatus::Saved) {
@@ -101,9 +111,9 @@ cfg::ImportResult RunImport(const cfg::LegacyInput& input, Config& out) {
     out.position_limit_x = read.limit_x;
     out.position_limit_y = read.limit_y;
     out.position_limit_y_down = read.limit_y;
-    const bool depth_flipped = read.position_invert_z != (read.position_sensitivity_z < 0.0f);
-    out.position_limit_z = depth_flipped ? read.limit_z_back : read.limit_z;
-    out.position_limit_z_back = depth_flipped ? read.limit_z : read.limit_z_back;
+    const DepthLimits depth = DepthLimitsOf(read);
+    out.position_limit_z = depth.forward;
+    out.position_limit_z_back = depth.back;
 
     // The game's crosshair always follows the aim now, over the widgets
     // reticle.cpp names; only a file that changed that loses something.
@@ -119,15 +129,42 @@ cfg::ImportResult RunImport(const cfg::LegacyInput& input, Config& out) {
 
     // End, Page Up and the three Ctrl+Shift chords were bound in code; only
     // the yaw key was in the file, read with no range check. A code outside
-    // 0x01-0xFE imports as unbound (N1), and 0 was unbound already.
+    // 0x01-0xFE imports as unbound (N1), and so does one on a Ctrl, Shift or
+    // Alt key alone (N3); 0 was unbound already.
     out.toggle_key = FormatKeyBindings({{KeyModifiers::kNone, VK_END}, {kChord, 'Y'}});
     out.cycle_tracking_mode_key = FormatKeyBindings({{KeyModifiers::kNone, VK_PRIOR}, {kChord, 'G'}});
     const std::string yaw_key = cfg::LegacyVirtualKeyToBindings(read.yaw_mode_key, "Hotkeys", "ToggleYawMode", dropped);
     const std::string yaw_chord = FormatKeyBindings({{kChord, 'H'}});
     out.yaw_mode_key = yaw_key.empty() ? yaw_chord : yaw_key + ", " + yaw_chord;
 
-    return present ? cfg::ImportResult::Imported(std::move(dropped), std::move(pose_shaping))
-                   : cfg::ImportResult::Absent(std::move(dropped), std::move(pose_shaping));
+    // A setting the player never changed follows Defaults.ini. Every file a
+    // release shipped reads as the frozen reader's defaults do, once the depth
+    // limits are taken as the leans they bounded, so those defaults stand for
+    // what the player was given. LimitY stood for both vertical bounds. End,
+    // Page Up and the chords were bound in code, and no build had the lean
+    // collision settings, so no player can have changed those.
+    const legacy::Config shipped;
+    const DepthLimits shipped_depth = DepthLimitsOf(shipped);
+    cfg::LegacyFollowsDefaultsIni follows;
+    follows.Setting(Concept::UdpPort, read.udp_port, shipped.udp_port);
+    follows.Setting(Concept::EnableOnStartup, read.enable_on_startup, shipped.enable_on_startup);
+    follows.Setting(Concept::WorldSpaceYaw, read.world_space_yaw, shipped.world_space_yaw);
+    follows.TrackingMode(read.position_enabled, shipped.position_enabled);
+    follows.Setting(Concept::LocalSmoothing, read.local_smoothing, shipped.local_smoothing);
+    follows.Setting(Concept::RemoteSmoothing, read.remote_smoothing, shipped.remote_smoothing);
+    follows.Setting(Concept::PositionLimitX, read.limit_x, shipped.limit_x);
+    follows.Setting(Concept::PositionLimitY, read.limit_y, shipped.limit_y);
+    follows.Setting(Concept::PositionLimitYDown, read.limit_y, shipped.limit_y);
+    follows.Setting(Concept::PositionLimitZ, depth.forward, shipped_depth.forward);
+    follows.Setting(Concept::PositionLimitZBack, depth.back, shipped_depth.back);
+    follows.NotInLegacy(Concept::CollisionEnabled);
+    follows.NotInLegacy(Concept::CollisionReleaseSmoothing);
+    follows.NotInLegacy(Concept::ToggleKey);
+    follows.NotInLegacy(Concept::CycleTrackingModeKey);
+    follows.Setting(Concept::YawModeKey, read.yaw_mode_key, shipped.yaw_mode_key);
+
+    return present ? cfg::ImportResult::Imported(std::move(dropped), std::move(pose_shaping), follows.Concepts())
+                   : cfg::ImportResult::Absent(std::move(dropped), std::move(pose_shaping), follows.Concepts());
 }
 
 }  // namespace
