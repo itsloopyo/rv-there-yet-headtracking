@@ -6,8 +6,9 @@ licence. Where a licence requires the copyright notice, the conditions and the
 disclaimer to accompany a binary distribution, the full text is reproduced here
 verbatim, and this file ships at the root of every release ZIP we publish.
 
-Nothing in this repository is derived from, or redistributes any part of,
-RV There Yet?.
+No game code or assets are redistributed. Camera layout offsets and
+relocation-independent function digests describe the installed RV There Yet?
+executables. The digests contain no game instruction bytes.
 
 | Component | Version | Licence | How it ships |
 |-----------|---------|---------|--------------|

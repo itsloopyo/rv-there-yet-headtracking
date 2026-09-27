@@ -37,6 +37,11 @@ struct Config {
     float position_limit_z = rvty::position::kLimitZ;
     float position_limit_z_back = rvty::position::kLimitZBack;
 
+    bool collision_enabled = true;
+    float collision_margin = 15.0f;
+    int collision_channel = 0;
+    float collision_release_smoothing = 0.9f;
+
     std::string toggle_key =
         cameraunlock::config::schema::ConceptTraits<cameraunlock::config::schema::Concept::ToggleKey>::kCanonicalDefault;
     std::string cycle_tracking_mode_key =

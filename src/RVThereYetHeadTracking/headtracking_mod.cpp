@@ -1,6 +1,7 @@
 #include "headtracking_mod.h"
 #include "logging.h"
 #include "reticle.h"
+#include "lean_trace.h"
 #include "position_boundary.h"
 #include "config.h"
 
@@ -258,11 +259,13 @@ namespace RVThereYetHeadTracking
             }
 
             if (!g_trackingEnabled.load(std::memory_order_relaxed)) {
+                lean_trace::Reset();
                 reticle::ResetIfOffset();
                 return;
             }
             // Menus / loading: leave the clean (vanilla) view untouched.
             if (!g_inGameplay.load(std::memory_order_relaxed)) {
+                lean_trace::Reset();
                 reticle::ResetIfOffset();
                 return;
             }
@@ -295,6 +298,7 @@ namespace RVThereYetHeadTracking
                 cPosValid = cRotValid && ComputePositionOffsetTracker(y, p, r, cSurge, cSway, cHeave);
             }
             if (!cRotValid) {
+                lean_trace::Reset();
                 reticle::ResetIfOffset();
                 return;  // no tracker data - leave the clean view untouched
             }
@@ -336,11 +340,14 @@ namespace RVThereYetHeadTracking
             // per-frame-cached tracker-space offset, projected with THIS view's
             // baseQ (each view has its own orientation).
             if (cPosValid) {
-                const FVector posOff = ProjectPositionOffset(baseQ, cSurge, cSway, cHeave);
+                const FVector wanted = ProjectPositionOffset(baseQ, cSurge, cSway, cHeave);
+                const FVector posOff = lean_trace::Clamp(self, outView, wanted);
                 const auto locAddr = reinterpret_cast<FVector*>(outView);
                 locAddr->X += posOff.X;
                 locAddr->Y += posOff.Y;
                 locAddr->Z += posOff.Z;
+            } else {
+                lean_trace::Reset();
             }
 
             // Reticle compensation: move the interaction widgets to where the
@@ -567,6 +574,7 @@ namespace RVThereYetHeadTracking
                 builds::ActiveProfile().Name);
 
             const Config settings = LoadSettings(module);
+            lean_trace::Configure(settings);
             const int udpPort = settings.udp_port;
 
             g_receiver = std::make_unique<cameraunlock::UdpReceiver>();

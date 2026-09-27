@@ -10,8 +10,8 @@
 // constant (RVAs into the EXE, engine struct field offsets) the mod needs to
 // operate. The registry holds one profile per supported build (Steam Win64,
 // Xbox WinGDK). At Initialize() time the mod fingerprints the live module and
-// selects the matching profile; no match (or a fingerprint-matched profile
-// whose RVAs are still zero) leaves the mod dormant via the fail-safe path.
+// selects the matching profile. An unknown build must pass engine-function
+// discovery before any hooks are installed; failed discovery stays dormant.
 //
 // Struct layouts (UObject / FMinimalViewInfo) are engine-version-bound, not
 // packaging-bound, so those fields match across the Steam and WinGDK profiles;

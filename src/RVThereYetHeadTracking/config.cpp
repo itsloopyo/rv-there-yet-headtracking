@@ -149,6 +149,11 @@ cfg::ConfigTable<Config> Table() {
         .Concept<Concept::PositionLimitYDown>(&Config::position_limit_y_down)
         .Concept<Concept::PositionLimitZ>(&Config::position_limit_z)
         .Concept<Concept::PositionLimitZBack>(&Config::position_limit_z_back)
+        .Concept<Concept::CollisionEnabled>(&Config::collision_enabled)
+        .Concept<Concept::CollisionMargin>(&Config::collision_margin)
+        .Comment("Sphere sweep radius in centimetres. Raised above the camera's live near clip plane when necessary.")
+        .Concept<Concept::CollisionChannel>(&Config::collision_channel)
+        .Concept<Concept::CollisionReleaseSmoothing>(&Config::collision_release_smoothing)
         .Concept<Concept::ToggleKey>(&Config::toggle_key)
         .Concept<Concept::CycleTrackingModeKey>(&Config::cycle_tracking_mode_key)
         .Concept<Concept::YawModeKey>(&Config::yaw_mode_key);

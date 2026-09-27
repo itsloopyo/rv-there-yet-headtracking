@@ -10,6 +10,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # is what users paste into crash reports, so getting it from a real artifact
 # (not a hand-maintained define) is what keeps reports accurate.
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/pixi.toml" _pixi_toml)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/pixi.toml")
 if(_pixi_toml MATCHES "(^|\n)version[ \t]*=[ \t]*\"([^\"]+)\"")
     set(RVTY_MOD_VERSION "${CMAKE_MATCH_2}")
 else()
@@ -94,7 +95,9 @@ add_library(${MOD_NAME} SHARED
     src/RVThereYetHeadTracking/dllmain.cpp
     src/RVThereYetHeadTracking/headtracking_mod.cpp
     src/RVThereYetHeadTracking/reticle.cpp
+    src/RVThereYetHeadTracking/lean_trace.cpp
     src/RVThereYetHeadTracking/builds/build_registry.cpp
+    src/RVThereYetHeadTracking/builds/image_discovery.cpp
     src/RVThereYetHeadTracking/builds/steam_offsets.cpp
     src/RVThereYetHeadTracking/builds/gdk_offsets.cpp
     src/RVThereYetHeadTracking/config.cpp
@@ -104,6 +107,7 @@ add_library(${MOD_NAME} SHARED
 target_include_directories(${MOD_NAME} PRIVATE
     src/RVThereYetHeadTracking
     src
+    ${minhook_src_SOURCE_DIR}/src/hde
 )
 
 target_compile_definitions(${MOD_NAME} PRIVATE
@@ -144,6 +148,24 @@ set_target_properties(${MOD_NAME} PROPERTIES
 option(RVTY_BUILD_TESTS "Build the position behaviour tests and the config tests" ON)
 if(RVTY_BUILD_TESTS)
     enable_testing()
+    add_executable(rvty_lean_clamp_tests tests/lean_clamp_main.cpp cameraunlock-core/cpp/tests/lean_clamp_tests.cpp)
+    target_include_directories(rvty_lean_clamp_tests PRIVATE cameraunlock-core/cpp/include)
+    add_test(NAME rvty_lean_clamp_tests COMMAND rvty_lean_clamp_tests)
+
+    add_executable(rvty_discovery_tests
+        tests/discovery_tests.cpp
+        src/RVThereYetHeadTracking/builds/image_discovery.cpp
+        src/RVThereYetHeadTracking/builds/build_registry.cpp
+        src/RVThereYetHeadTracking/builds/steam_offsets.cpp
+        src/RVThereYetHeadTracking/builds/gdk_offsets.cpp
+    )
+    target_include_directories(rvty_discovery_tests PRIVATE
+        src/RVThereYetHeadTracking ${minhook_src_SOURCE_DIR}/src/hde)
+    target_link_libraries(rvty_discovery_tests PRIVATE minhook cameraunlock)
+    if(MSVC)
+        target_compile_options(rvty_discovery_tests PRIVATE /W4 /WX /EHsc)
+    endif()
+    add_test(NAME rvty_discovery_tests COMMAND rvty_discovery_tests)
 
     add_executable(rvty_position_tests tests/position_tests.cpp)
     target_include_directories(rvty_position_tests PRIVATE

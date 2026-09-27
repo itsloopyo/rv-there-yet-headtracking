@@ -90,8 +90,10 @@ You need two files in that folder:
 1. `dxgi.dll` - the mod itself (from the release ZIP's `plugins/`). This is a
    DXGI proxy: every DXGI call the game makes flows through us, which is how we
    hook the camera path. The same `dxgi.dll` works for both Steam and Xbox Game Pass;
-   the proxy fingerprints the running exe and selects the right RVA profile at
-   load time.
+   the proxy recognises supported builds at load time. After an update, it can
+   also locate unchanged camera and reflection functions at new addresses.
+   If those functions have changed or cannot be identified uniquely, tracking
+   stays disabled until the mod is updated.
 2. `dxgi_orig.dll` - **a copy of your own `C:\Windows\System32\dxgi.dll`**. The
    mod's exports forward here, so the game still reaches the real DXGI through
    us. Copy it yourself, matching whichever build you have:
@@ -256,9 +258,13 @@ The built-in value of each setting set to `default` below:
 - `PositionLimitYDown=0.2`
 - `PositionLimitZ=0.4`
 - `PositionLimitZBack=0.1`
+- `CollisionEnabled=true`
+- `CollisionReleaseSmoothing=0.9`
 - `ToggleKey=End, Ctrl+Shift+Y`
 - `CycleTrackingModeKey=PageUp, Ctrl+Shift+G`
 - `YawModeKey=PageDown, Ctrl+Shift+H`
+
+Positional lean uses a sphere sweep against the game world. `CollisionMargin=15.0` sets its radius in centimetres; the mod raises it when needed to stay above the live near clip distance. `CollisionChannel=0` selects the trace channel. Obstructions shorten lean immediately, and `CollisionReleaseSmoothing` controls how it returns when space opens. If the collision query is unavailable, positional lean is withheld while rotation continues.
 
 With every setting at its default, the file reads:
 
@@ -311,6 +317,15 @@ PositionLimitYDown=default
 PositionLimitZ=default
 ; How far, in metres, leaning back can move the view.
 PositionLimitZBack=default
+; true: leaning stops at walls instead of moving the view through them.
+CollisionEnabled=default
+; Sphere sweep radius in centimetres. Raised above the camera's live near clip plane when necessary.
+CollisionMargin=15.0
+; Which of the game's collision channels the wall check tests against.
+CollisionChannel=0
+; How gently the view eases back out after a wall stopped a lean.
+; 0 is the quickest, 1 the slowest.
+CollisionReleaseSmoothing=default
 
 [Hotkeys]
 ; Turns head tracking on and off.

@@ -15,6 +15,17 @@
 
 namespace RVThereYetHeadTracking::builds
 {
+    extern const BuildProfile kSteamProfile_20260926 = {
+        /* Name        */ "steam-win64-20260926",
+        /* Fingerprint */ { 0xb831d79fu, 0x0b178000u, 0x0ad8fc59u },
+        /* Offsets     */ {
+            0x03efc8a0ULL,
+            { 0x18, 0x30 },
+            { 0x0a50e640ULL, 0x14, 0x18, 0x10000,
+              0x0a42a4c0ULL, 0x10, 0x10, 0x18, 0x20 },
+        },
+    };
+
     extern const BuildProfile kSteamProfile_20260701;
 
     // ---- Steam Win64 build (PE TS 0xdfe4dc2c) ----

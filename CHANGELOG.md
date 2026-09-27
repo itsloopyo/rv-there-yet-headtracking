@@ -8,6 +8,17 @@
 
 ## [Unreleased]
 
+- Clamp positional head tracking against world geometry, with immediate stopping and smooth release.
+
+### Compatibility
+
+- Restore head tracking on the updated Steam and Xbox Game Pass builds, while
+  retaining support for the earlier builds.
+- Find unchanged camera and reflection functions when an update moves their
+  addresses. Changed or ambiguous functions leave tracking disabled.
+- Ignore the texture asset named `Crosshair` when finding HUD widgets, avoiding
+  invalid widget calls and repeated engine warnings.
+
 ### Added
 
 - A setting set to `default` in `CameraUnlock.ini` takes its value from `Defaults.ini`, which every head tracking mod that keeps its settings in `CameraUnlock.ini` reads. Head tracking mods that keep their settings in another file do not read it, and neither do earlier versions of this mod. Writing a value in place of `default` changes that setting for this game only. When the mod saves a setting that a hotkey changed in game, it writes the new value in place of `default`, so that setting no longer follows `Defaults.ini` in this game until you set it to `default` again.

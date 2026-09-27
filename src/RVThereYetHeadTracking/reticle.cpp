@@ -415,7 +415,11 @@ namespace RVThereYetHeadTracking::reticle
             ue::ForEachUObject([&](std::uintptr_t obj) -> bool {
                 const std::string on = ue::ObjectName(obj);
                 if (!IsReticleTargetName(on)) return false;
-                if (ue::ContainsCI(on, "Default__")) return false;
+                // A texture asset is also named Crosshair. Widget functions
+                // cannot be invoked on that object, even with a valid vtable.
+                const std::string className = ue::ClassName(obj);
+                if ((on == "Crosshair" && className != "Image") ||
+                    (on == "LookAtObjectName" && className != "TextBlock")) return false;
                 std::uintptr_t cls = 0;
                 ue::SafeReadPtr(obj + Offsets().UObjectGlobals.kClassPrivate, cls);
                 g_targets.push_back({ obj, cls });

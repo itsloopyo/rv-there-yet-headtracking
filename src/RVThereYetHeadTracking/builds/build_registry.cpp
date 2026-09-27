@@ -1,4 +1,5 @@
 #include "build_registry.h"
+#include "image_discovery.h"
 
 #include <array>
 
@@ -20,6 +21,8 @@ namespace RVThereYetHeadTracking::builds
     // the date is just for human readability).
     extern const BuildProfile kSteamProfile_20260701;
     extern const BuildProfile kGdkProfile_20260701;
+    extern const BuildProfile kSteamProfile_20260926;
+    extern const BuildProfile kGdkProfile_20260926;
 
     namespace
     {
@@ -27,12 +30,15 @@ namespace RVThereYetHeadTracking::builds
         // "primary" profile used to label HostNewer/HostOlder when no profile
         // matches. Add new entries to the TOP of this array (after the
         // diagnostic primary).
-        constexpr std::array<const BuildProfile*, 2> kKnownProfiles = {
+        constexpr std::array<const BuildProfile*, 4> kKnownProfiles = {
+            &kSteamProfile_20260926,
+            &kGdkProfile_20260926,
             &kSteamProfile_20260701,
             &kGdkProfile_20260701,
         };
 
         const BuildProfile* g_active = nullptr;
+        BuildProfile g_discovered{};
 
         // A profile is "complete" iff its hook target RVA is non-zero. This
         // lets us register a placeholder profile (correct fingerprint, RVAs
@@ -46,6 +52,7 @@ namespace RVThereYetHeadTracking::builds
 
     MatchResult SelectProfile(HMODULE host)
     {
+        g_active = nullptr;
         PeFingerprint running{};
         if (!cameraunlock::memory::ReadPeFingerprint(host, running)) {
             Log::Line("build-check: failed to read PE header from host module");
@@ -72,8 +79,20 @@ namespace RVThereYetHeadTracking::builds
             }
         }
 
-        // No match. Classify against the primary profile so the log explains
-        // direction ("patched newer", "older", or "tampered").
+        const auto discovered = DiscoverImage(reinterpret_cast<const std::uint8_t*>(host), running.SizeOfImage);
+        if (!discovered.error) {
+            g_discovered = { "validated-engine-functions", running, {
+                discovered.viewBuilder, {0x18, 0x30},
+                {discovered.objects, 0x14, 0x18, 0x10000,
+                 discovered.names, 0x10, 0x10, 0x18, 0x20},
+            } };
+            g_active = &g_discovered;
+            Log::Line("build-check: discovered unchanged engine functions: builder=0x%08x objects=0x%08x names=0x%08x",
+                discovered.viewBuilder, discovered.objects, discovered.names);
+            return MatchResult::Matched;
+        }
+        Log::Line("build-check: discovery rejected this build: %s", discovered.error);
+
         switch (cameraunlock::memory::ClassifyMismatch(
                     running, kKnownProfiles.front()->Fingerprint)) {
             case cameraunlock::memory::FingerprintMismatch::Newer:

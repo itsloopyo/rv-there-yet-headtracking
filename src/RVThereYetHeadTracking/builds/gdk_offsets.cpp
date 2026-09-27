@@ -20,6 +20,17 @@
 
 namespace RVThereYetHeadTracking::builds
 {
+    extern const BuildProfile kGdkProfile_20260926 = {
+        /* Name        */ "gdk-wingdk-20260926",
+        /* Fingerprint */ { 0x4f7f51aeu, 0x0aa9f000u, 0x0a6f8864u },
+        /* Offsets     */ {
+            0x03e1c450ULL,
+            { 0x18, 0x30 },
+            { 0x09ed2a40ULL, 0x14, 0x18, 0x10000,
+              0x09dee800ULL, 0x10, 0x10, 0x18, 0x20 },
+        },
+    };
+
     extern const BuildProfile kGdkProfile_20260701;
 
     // ---- Xbox WinGDK build (PE TS 0xee900652, package 1.2.11.0) ----

@@ -6,7 +6,8 @@
 // (PE TimeDateStamp + SizeOfImage + CheckSum), looks up the matching entry in
 // the known-profiles array, and stashes it as the active profile so the rest
 // of the code can read RVAs and field offsets without re-fingerprinting on
-// every call.
+// every call. Unknown builds require unique, unchanged engine-function
+// fingerprints and consistent reflection references before they can activate.
 
 namespace RVThereYetHeadTracking
 {
