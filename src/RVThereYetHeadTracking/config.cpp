@@ -86,14 +86,15 @@ cfg::ImportResult RunImport(const cfg::LegacyInput& input, Config& out) {
     shaping(read.position_invert_y, false, "Position", "InvertY");
     shaping(read.position_invert_z, true, "Position", "InvertZ");
 
-    // The reader keeps the port inside 1-65535 and every float finite, so
-    // these carry over as they are. A smoothing value or limit outside the
-    // canonical range has no rule: the owner cannot write it and defers the
-    // import, and the session runs on it as the earlier build did.
+    // The reader keeps the port inside 1-65535 and every float finite, and
+    // checks no other range, so a smoothing value or limit outside its
+    // canonical row's range imports as the nearest end of it (N4).
     out.udp_port = read.udp_port;
     out.enable_on_startup = read.enable_on_startup;
-    out.local_smoothing = read.local_smoothing;
-    out.remote_smoothing = read.remote_smoothing;
+    out.local_smoothing =
+        cfg::LegacyClampToRange<Concept::LocalSmoothing>(read.local_smoothing, "Tracking", "LocalSmoothing", dropped);
+    out.remote_smoothing =
+        cfg::LegacyClampToRange<Concept::RemoteSmoothing>(read.remote_smoothing, "Tracking", "RemoteSmoothing", dropped);
     out.world_space_yaw = read.world_space_yaw;
 
     // [Position] Enabled chose the startup mode and nothing else: the cycle
@@ -108,10 +109,26 @@ cfg::ImportResult RunImport(const cfg::LegacyInput& input, Config& out) {
     // processor's depth ran after InvertZ and a negative SensitivityZ, which
     // for the file v0.3.0 shipped was the lean back; each limit carries over
     // as the bound on the lean it bounded.
-    out.position_limit_x = read.limit_x;
-    out.position_limit_y = read.limit_y;
-    out.position_limit_y_down = read.limit_y;
-    const DepthLimits depth = DepthLimitsOf(read);
+    using LimitRange = cfg::schema::ConceptTraits<Concept::PositionLimitX>;
+    static_assert(cfg::schema::ConceptTraits<Concept::PositionLimitY>::kMin == LimitRange::kMin &&
+                      cfg::schema::ConceptTraits<Concept::PositionLimitY>::kMax == LimitRange::kMax &&
+                      cfg::schema::ConceptTraits<Concept::PositionLimitYDown>::kMin == LimitRange::kMin &&
+                      cfg::schema::ConceptTraits<Concept::PositionLimitYDown>::kMax == LimitRange::kMax &&
+                      cfg::schema::ConceptTraits<Concept::PositionLimitZ>::kMin == LimitRange::kMin &&
+                      cfg::schema::ConceptTraits<Concept::PositionLimitZ>::kMax == LimitRange::kMax &&
+                      cfg::schema::ConceptTraits<Concept::PositionLimitZBack>::kMin == LimitRange::kMin &&
+                      cfg::schema::ConceptTraits<Concept::PositionLimitZBack>::kMax == LimitRange::kMax,
+                  "LimitY fills both vertical rows and LimitZ and LimitZBack may swap, so the limit rows take one range");
+    out.position_limit_x = cfg::LegacyClampToRange<Concept::PositionLimitX>(read.limit_x, "Position", "LimitX", dropped);
+    const float limit_y = cfg::LegacyClampToRange<Concept::PositionLimitY>(read.limit_y, "Position", "LimitY", dropped);
+    out.position_limit_y = limit_y;
+    out.position_limit_y_down = limit_y;
+    legacy::Config clamped_depth = read;
+    clamped_depth.limit_z =
+        cfg::LegacyClampToRange<Concept::PositionLimitZ>(read.limit_z, "Position", "LimitZ", dropped);
+    clamped_depth.limit_z_back =
+        cfg::LegacyClampToRange<Concept::PositionLimitZBack>(read.limit_z_back, "Position", "LimitZBack", dropped);
+    const DepthLimits depth = DepthLimitsOf(clamped_depth);
     out.position_limit_z = depth.forward;
     out.position_limit_z_back = depth.back;
 
@@ -142,8 +159,10 @@ cfg::ImportResult RunImport(const cfg::LegacyInput& input, Config& out) {
     // limits are taken as the leans they bounded, so those defaults stand for
     // what the player was given. LimitY stood for both vertical bounds. End,
     // Page Up and the chords were bound in code, and no build had the lean
-    // collision settings, so no player can have changed those.
+    // collision settings, so no player can have changed those. Each number is
+    // compared as read, so one N4 clamped is the player's.
     const legacy::Config shipped;
+    const DepthLimits read_depth = DepthLimitsOf(read);
     const DepthLimits shipped_depth = DepthLimitsOf(shipped);
     cfg::LegacyFollowsDefaultsIni follows;
     follows.Setting(Concept::UdpPort, read.udp_port, shipped.udp_port);
@@ -155,8 +174,8 @@ cfg::ImportResult RunImport(const cfg::LegacyInput& input, Config& out) {
     follows.Setting(Concept::PositionLimitX, read.limit_x, shipped.limit_x);
     follows.Setting(Concept::PositionLimitY, read.limit_y, shipped.limit_y);
     follows.Setting(Concept::PositionLimitYDown, read.limit_y, shipped.limit_y);
-    follows.Setting(Concept::PositionLimitZ, depth.forward, shipped_depth.forward);
-    follows.Setting(Concept::PositionLimitZBack, depth.back, shipped_depth.back);
+    follows.Setting(Concept::PositionLimitZ, read_depth.forward, shipped_depth.forward);
+    follows.Setting(Concept::PositionLimitZBack, read_depth.back, shipped_depth.back);
     follows.NotInLegacy(Concept::CollisionEnabled);
     follows.NotInLegacy(Concept::CollisionReleaseSmoothing);
     follows.NotInLegacy(Concept::ToggleKey);

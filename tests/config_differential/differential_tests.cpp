@@ -57,9 +57,10 @@
 // does one on a Ctrl, Shift or Alt key alone (N3). The
 // reader turns a float that is not finite into its default, so N2 never
 // applies. No default moved, so the no-file input may not differ either. A
-// smoothing value outside 0-1 or a position limit outside 0-10 that the reader
-// took has no approved rule: the owner cannot write it and defers the import
-// (kUnrepresentable), and the session runs on what the import read.
+// smoothing value outside 0-1 or a position limit outside 0-10, which the
+// reader took with no range check, imports as the nearest end of the range and
+// is recorded (N4); the row stays the player's, so the rows left to Defaults.ini
+// are derived from the reading before the clamp.
 //
 // With the axis flips folded, v0.3.0's own reading of the file it shipped is
 // the migration's, exactly: a player who kept that file leans as v0.3.0 had
@@ -80,17 +81,18 @@
 // table binds. Over the first two the session runs as the import read, since
 // the frozen reader's defaults are the built-in values. Over the third a row
 // the player never changed is `default` and takes Defaults.ini's value, and a
-// changed row keeps the player's. After every load HeadTracking.ini keeps its bytes, write time and
-// attributes, and the folder holds it and CameraUnlock.ini and nothing else
-// (HeadTracking.ini alone after a deferred import). The distinct migrated files
+// changed row keeps the player's. After every load HeadTracking.ini keeps its
+// bytes, write time and attributes, and the folder holds it and
+// CameraUnlock.ini and nothing else. The distinct migrated files
 // are written beside the executable under migrated\, for lint-migrated.mjs to
 // run core's canonical config lint over.
 //
 // Inputs: every distinct HeadTracking.ini a published build shipped (installer
 // ZIP and Nexus ZIP; no published build seeded one through the launcher), no
 // file, an empty file, core's mutation corpus over the file v0.3.0 shipped, that
-// file with ToggleYawMode set to every code from 0x01 to 0xFE, and that file with
-// VerticalScale away from 1. No published build wrote the file, so there is no
+// file with ToggleYawMode set to every code from 0x01 to 0xFE, that file with
+// VerticalScale away from 1, and that file with a smoothing value or a limit
+// outside its range or at an end of it. No published build wrote the file, so there is no
 // first-run output: a player's file is one of the shipped ones, edited or not.
 
 #include <windows.h>
@@ -705,6 +707,14 @@ std::vector<Input> Inputs() {
         std::snprintf(name, sizeof(name), "ToggleYawMode = 0x%02X", static_cast<unsigned>(code));
         inputs.push_back({name, true, Replaced(NewestShipped(), "ToggleYawMode = 0x22", name)});
     }
+    // Outside the canonical ranges, clamped (N4), and at their ends, which are not.
+    const std::pair<const char*, const char*> ranges[] = {
+        {"LimitX = 0.30", "LimitX = 12"},         {"LimitX = 0.30", "LimitX = 10"},
+        {"LimitZ = 0.10", "LimitZ = -0.5"},       {"LimitZBack = 0.40", "LimitZBack = 0"},
+        {"LocalSmoothing = 0.0", "LocalSmoothing = -0.5"}, {"RemoteSmoothing = 0.15", "RemoteSmoothing = 1.5"},
+        {"RemoteSmoothing = 0.15", "RemoteSmoothing = 1"},
+    };
+    for (const auto& [from, to] : ranges) inputs.push_back({to, true, Replaced(NewestShipped(), from, to)});
     return inputs;
 }
 
@@ -718,6 +728,10 @@ bool IsModifierKey(int vk) { return (vk >= 0x10 && vk <= 0x12) || (vk >= 0xA0 &&
 // `yaw_code` is the code the reader gave ToggleYawMode.
 cfg::DropRule RuleFor(const std::string& section, const std::string& key, int yaw_code) {
     if (section == "Reticle" || (section == "Tracking" && key == "ShowReticle")) return cfg::DropRule::Reticle;
+    if ((section == "Tracking" && (key == "LocalSmoothing" || key == "RemoteSmoothing")) ||
+        (section == "Position" && key.rfind("Limit", 0) == 0)) {
+        return cfg::DropRule::NumberOutOfRange;
+    }
     if (section == "Hotkeys") return IsModifierKey(yaw_code) ? cfg::DropRule::ModifierKey : cfg::DropRule::KeyCodeOutOfRange;
     return cfg::DropRule::PoseShaping;
 }
@@ -770,7 +784,7 @@ Reading Expected(Reading g, const cfg::ImportResult& result, const std::string& 
                                                return std::get<0>(r) == rvty_oracle::kYawMode && std::get<2>(r) == 0;
                                            }),
                             g.hotkeys.end());
-        } else {
+        } else if (d.rule != cfg::DropRule::NumberOutOfRange) {
             Check(d.rule == cfg::DropRule::PoseShaping,
                   name + ": the import drops [" + d.section + "] " + d.key + ", which no rule here covers");
         }
@@ -779,22 +793,33 @@ Reading Expected(Reading g, const cfg::ImportResult& result, const std::string& 
 }
 
 // A smoothing value outside 0-1 or a position limit outside 0-10 that the
-// reader took, which the canonical rows cannot hold. No approved rule covers
-// it, so the owner defers such a file: it stays as it is, nothing is saved, the
-// session runs on what the import read, and the import is tried again at every
-// launch until core widens the range or the owner rules on it.
-const char* const kUnrepresentable =
-    "a smoothing value outside 0-1 or a position limit outside 0-10, which the canonical rows cannot hold, so the "
-    "import defers";
-
-bool Unrepresentable(const legacy::Config& c) {
-    for (const float smoothing : {c.local_smoothing, c.remote_smoothing}) {
-        if (smoothing < 0.0f || smoothing > 1.0f) return true;
+// reader took imports as the nearest end of the range (N4), and is dropped
+// exactly then. `g` is Expected's reading of `read`, whose depth limits are
+// already the leans they bounded; the two take one range, so either order clamps
+// alike.
+Reading Clamped(Reading g, const legacy::Config& read, const cfg::ImportResult& result, const std::string& name) {
+    const auto recorded = [&](float value, float lo, float hi, const char* section, const char* key) {
+        const bool outside = value < lo || value > hi;
+        const bool dropped = std::any_of(result.dropped.begin(), result.dropped.end(), [&](const cfg::DroppedValue& d) {
+            return d.rule == cfg::DropRule::NumberOutOfRange && d.section == section && d.key == key;
+        });
+        Check(dropped == outside, name + ": [" + section + "] " + key + " is clamped exactly when it is outside its range");
+    };
+    recorded(read.local_smoothing, 0.0f, 1.0f, "Tracking", "LocalSmoothing");
+    recorded(read.remote_smoothing, 0.0f, 1.0f, "Tracking", "RemoteSmoothing");
+    recorded(read.limit_x, 0.0f, 10.0f, "Position", "LimitX");
+    recorded(read.limit_y, 0.0f, 10.0f, "Position", "LimitY");
+    recorded(read.limit_z, 0.0f, 10.0f, "Position", "LimitZ");
+    recorded(read.limit_z_back, 0.0f, 10.0f, "Position", "LimitZBack");
+    for (float* smoothing : {&g.local_smoothing, &g.remote_smoothing, &g.position.local_smoothing,
+                             &g.position.remote_smoothing}) {
+        *smoothing = std::clamp(*smoothing, 0.0f, 1.0f);
     }
-    for (const float limit : {c.limit_x, c.limit_y, c.limit_z, c.limit_z_back}) {
-        if (limit < 0.0f || limit > 10.0f) return true;
+    for (float* limit : {&g.position.limit_x, &g.position.limit_y, &g.position.limit_y_down, &g.position.limit_z,
+                         &g.position.limit_z_back}) {
+        *limit = std::clamp(*limit, 0.0f, 10.0f);
     }
-    return false;
+    return g;
 }
 
 // ---- Checks on a load ------------------------------------------------------------
@@ -879,27 +904,16 @@ fs::path MigratedFolder() {
 struct Tally {
     int created = 0;
     int migrated = 0;
-    int deferred = 0;
     std::set<std::string> files;
 };
 
 // Runs the owner's Load in `s`, whose game folder holds the input as
 // HeadTracking.ini or nothing, checks what a load must do beyond comparison 2,
 // and returns the settings the session runs on.
-Config Migrate(const Input& input, bool unrepresentable, const Scratch& s, const std::string& label, Tally& tally) {
+Config Migrate(const Input& input, const Scratch& s, const std::string& label, Tally& tally) {
     const std::optional<FileState> legacy_before = StateOf(s.legacy());
     const cfg::ConfigLoadResult<Config> loaded = cfg::ConfigOwner<Config>(s.Options()).Load();
     Check(StateOf(s.legacy()) == legacy_before, label + ": a load leaves HeadTracking.ini's bytes, write time and attributes");
-
-    if (unrepresentable) {
-        ++tally.deferred;
-        Check(loaded.status == cfg::ConfigLoadStatus::Deferred,
-              label + ": " + kUnrepresentable + ", not " + cfg::ConfigLoadStatusName(loaded.status));
-        Check(s.Names() == std::set<std::string>{"HeadTracking.ini"}, label + ": a deferred import creates no file");
-        Check(loaded.reason.find("cannot be converted") != std::string::npos,
-              label + ": the player is told which value could not be converted");
-        return loaded.config;
-    }
 
     const cfg::ConfigLoadStatus want = input.present ? cfg::ConfigLoadStatus::Migrated : cfg::ConfigLoadStatus::Created;
     if (loaded.status != want) std::printf("  %s: %s, %s\n", label.c_str(), cfg::ConfigLoadStatusName(loaded.status), loaded.reason.c_str());
@@ -977,6 +991,7 @@ void Compare(const std::vector<Input>& inputs) {
     int modeTouched = 0;
     int compared = 0;
     int axis = 0, vertical = 0, limit_y = 0;
+    int clamped = 0;
     for (const Input& input : inputs) {
         const std::string& name = input.name;
 
@@ -1002,7 +1017,6 @@ void Compare(const std::vector<Input>& inputs) {
             if (Bits(published.reticle_vertical_scale) != Bits(1.0f)) ++vertical;
             if (Bits(published.position.limit_y_down) != Bits(published.position.limit_y)) ++limit_y;
         }
-        const bool unrepresentable = Unrepresentable(read);
 
         // Comparison 2 over a Defaults.ini the owner creates with the built-in
         // values. The import's own result says what it folded and dropped.
@@ -1015,10 +1029,15 @@ void Compare(const std::vector<Input>& inputs) {
             result = config::Import().run({s.legacy().wstring(), s.legacy().string(), false}, mapped);
             Check(result.status == (input.present ? cfg::ImportStatus::Imported : cfg::ImportStatus::Absent),
                   name + ": the import reads every input, as the published build did");
-            want = Observe(Expected(imported, result, name));
+            const Reading expected = Expected(imported, result, name);
+            want = Observe(Clamped(expected, read, result, name));
+            if (std::any_of(result.dropped.begin(), result.dropped.end(),
+                            [](const cfg::DroppedValue& d) { return d.rule == cfg::DropRule::NumberOutOfRange; })) {
+                ++clamped;
+            }
             const std::set<Concept> follows(result.follows_defaults_ini.begin(), result.follows_defaults_ini.end());
             Check(follows.size() == result.follows_defaults_ini.size(), name + ": follows_defaults_ini names each row once");
-            const std::set<Concept> untouched = UntouchedRows(want, no_file);
+            const std::set<Concept> untouched = UntouchedRows(Observe(expected), no_file);
             if (follows != untouched) {
                 std::printf("  %s: follows Defaults.ini %s, untouched %s\n", name.c_str(), Names(follows).c_str(),
                             Names(untouched).c_str());
@@ -1027,13 +1046,13 @@ void Compare(const std::vector<Input>& inputs) {
             if (untouched != AllRows()) ++touched;
             if (!untouched.count(Concept::RotationEnabled)) ++modeTouched;
             if (IsUnedited(name)) Check(untouched == AllRows(), name + ": every row follows Defaults.ini");
-            const Config migrated = Migrate(input, unrepresentable, s, name, builtin);
+            const Config migrated = Migrate(input, s, name, builtin);
             const Record got = Observe(FromCanonical(migrated));
             const std::vector<std::string> diff = Differences(want, got);
             for (const std::string& d : diff) std::printf("  comparison 2, %s: %s\n", name.c_str(), d.c_str());
             Check(diff.empty(), name + ": comparison 2, the session runs as the import read, apart from the approved changes");
 
-            if (!unrepresentable && fs::exists(s.canonical())) {
+            if (fs::exists(s.canonical())) {
                 // Over the built-in values the table's own defaults stand for Defaults.ini.
                 Config reread;
                 CanonicalDiagnostics(ReadFileBytes(s.canonical()), reread);
@@ -1065,7 +1084,7 @@ void Compare(const std::vector<Input>& inputs) {
             config::Import().run({s.legacy().wstring(), s.legacy().string(), false}, unused);
             Check(s.Names() == before && ReadFileBytes(s.legacy()) == input.bytes,
                   name + ": the import leaves a read-only folder as it was");
-            const Config c = Migrate(input, unrepresentable, s, name + " (read-only)", readonly);
+            const Config c = Migrate(input, s, name + " (read-only)", readonly);
             Check(Differences(want, Observe(FromCanonical(c))).empty(),
                   name + ": a read-only HeadTracking.ini imports as a writable one does");
             Check((GetFileAttributesW(s.legacy().c_str()) & FILE_ATTRIBUTE_READONLY) != 0,
@@ -1075,13 +1094,12 @@ void Compare(const std::vector<Input>& inputs) {
         if (input.present) {
             // Over a Defaults.ini that differs everywhere: a row the player
             // never changed is `default` and takes Defaults.ini's value, and a
-            // changed row keeps the player's, a deferred import included. With
-            // no legacy file every row is Defaults.ini's, which config_tests
-            // covers.
+            // changed row keeps the player's. With no legacy file every row is
+            // Defaults.ini's, which config_tests covers.
             Scratch s;
             s.WriteLegacy(input.bytes);
             s.WriteDefaults(kSkewedDefaults);
-            const Config c = Migrate(input, unrepresentable, s, name + " (skewed Defaults.ini)", skewed);
+            const Config c = Migrate(input, s, name + " (skewed Defaults.ini)", skewed);
             const std::set<Concept> follows(result.follows_defaults_ini.begin(), result.follows_defaults_ini.end());
             const std::vector<std::string> diff =
                 Differences(OverDefaults(want, follows, skewedRecord), Observe(FromCanonical(c)));
@@ -1104,11 +1122,11 @@ void Compare(const std::vector<Input>& inputs) {
                 compared, axis, vertical, limit_y);
     Check(axis == compared, "5341862's axis move reaches every input, the shipped files and no file included");
     Check(vertical > 0 && limit_y > 0, "the inputs reach the VerticalScale retirement and the downward limit");
-    std::printf("comparison 2 over built-in Defaults.ini: %d created, %d migrated, %d deferred (%s)\n", builtin.created,
-                builtin.migrated, builtin.deferred, kUnrepresentable);
-    std::printf("read-only: %d migrated, %d deferred; skewed Defaults.ini: %d migrated, %d deferred\n",
-                readonly.migrated, readonly.deferred, skewed.migrated, skewed.deferred);
-    Check(builtin.deferred > 0, "the corpus reaches a value the canonical rows cannot hold");
+    std::printf("comparison 2 over built-in Defaults.ini: %d created, %d migrated, %d with a value outside its range "
+                "clamped (N4)\n",
+                builtin.created, builtin.migrated, clamped);
+    std::printf("read-only: %d migrated; skewed Defaults.ini: %d migrated\n", readonly.migrated, skewed.migrated);
+    Check(clamped > 0, "the inputs reach a value outside its canonical row's range");
     std::printf("%d inputs changed a row from what no file gives, %d of them the tracking mode\n", touched, modeTouched);
     Check(touched > 0 && modeTouched > 0,
           "the inputs change rows, the tracking mode among them, which then do not follow Defaults.ini");
