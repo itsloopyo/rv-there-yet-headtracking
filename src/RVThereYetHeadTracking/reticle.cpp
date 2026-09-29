@@ -6,11 +6,13 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <vector>
 #include <windows.h>
 
 #include "builds/build_registry.h"
+#include "uobject_live.h"
 
 #include "cameraunlock/rendering/aim_quat_projection.h"
 #include "cameraunlock/unreal/ue_runtime.h"
@@ -36,14 +38,10 @@ namespace RVThereYetHeadTracking::reticle
         constexpr std::uint64_t kLogSteadyMs = 60000;
         constexpr int kLogBurstLines = 10;
 
-        // Widget moves are throttled to ~100 Hz: the builder fires several
-        // times per frame and ProcessEvent is a script-VM call.
-        constexpr std::uint64_t kUpdateIntervalMs = 10;
-
-        // Rate limits for the lazy UObject-scan resolutions (a full scan
-        // touches ~90k objects, so never run it every frame).
-        constexpr std::uint64_t kTargetRescanMs = 500;
-        constexpr std::uint64_t kFnScanRetryMs = 1000;
+        // The widget geometry scale and viewport size move on a resolution
+        // change, a windowed/fullscreen switch or a move to another monitor, so
+        // they are re-read at this interval rather than latched.
+        constexpr std::uint64_t kScalePollMs = 500;
 
         // Sanity window for viewport / widget-geometry scale reads; values
         // outside it mean we read garbage, not a real scale.
@@ -53,85 +51,57 @@ namespace RVThereYetHeadTracking::reticle
         // The builder's self object holds the owning PlayerController here.
         constexpr std::uintptr_t kBuilderPlayerControllerOffset = 0x30;
 
+        // Everything the reticle calls into is found by a full UObject scan
+        // (~90k objects, ~15 ms). Those scans run on the game-state thread
+        // (ResolveReflection, RefreshTargets) and publish through these
+        // atomics, so the game thread never stalls on one.
         using ProcessEvent_t = void(__fastcall*)(void* self, void* func, void* params);
-        ProcessEvent_t g_processEvent = nullptr;
-        std::atomic<bool> g_peResolved{false};
+        std::atomic<ProcessEvent_t> g_processEvent{nullptr};
         constexpr std::size_t kProcessEventVtableSlot = 76;  // UE5.6.x UObject::ProcessEvent
-        std::uintptr_t g_setRenderTranslationFn = 0;
+        std::atomic<std::uintptr_t> g_setRenderTranslationFn{0};
 
-        // UMG viewport DPI scale. RenderTransform.Translation is in the
-        // widget's slate units, which the viewport DPI-scales to reach screen
-        // pixels - so our screen-pixel offset must be divided by this scale to
-        // land right. Read once from UWidgetLayoutLibrary::GetViewportScale so
-        // the reticle is correct across resolutions (rather than baking a
-        // resolution-specific constant). 1.0 until resolved / if the read
-        // fails.
+        // UMG viewport DPI scale, from UWidgetLayoutLibrary::GetViewportScale.
+        // Only the divisor until the widget geometry scale below has been read:
+        // on this game it reports 1.0 while the HUD draws at 0.666 at 720p.
         float g_viewportDpiScale = 1.0f;
         bool  g_dpiResolved = false;
-        std::uintptr_t g_getViewportScaleFn = 0;
-        std::uintptr_t g_widgetLayoutCDO = 0;
+        std::atomic<std::uintptr_t> g_getViewportScaleFn{0};
+        std::atomic<std::uintptr_t> g_getViewportSizeFn{0};
+        std::atomic<std::uintptr_t> g_widgetLayoutCDO{0};
 
         // UGameplayStatics::ProjectWorldToScreen - the game's own projection.
         // Feeding it a world point along the clean-aim direction returns the
         // exact screen pixel where that point lands in the rendered (tracked)
         // view, so the reticle offset needs no FOV/aspect guesswork.
-        std::uintptr_t g_projectW2SFn = 0;
-        std::uintptr_t g_gameplayStaticsCDO = 0;
+        std::atomic<std::uintptr_t> g_projectW2SFn{0};
+        std::atomic<std::uintptr_t> g_gameplayStaticsCDO{0};
 
         // The reticle widget's accumulated geometry scale (UWidget::
         // GetCachedGeometry -> FGeometry.Scale). RenderTransform.Translation is
         // in the widget's LOCAL space, so a screen-pixel offset must be divided
         // by this scale (the HUD renders the crosshair at < 1.0 scale, which is
-        // exactly the residual undercompensation). 0 until resolved.
-        std::uintptr_t g_getCachedGeometryFn = 0;
+        // exactly the residual undercompensation). 0 until first read.
+        std::atomic<std::uintptr_t> g_getCachedGeometryFn{0};
         float g_widgetGeoScale = 0.0f;
+        std::uint64_t g_lastScalePoll = 0;
 
         // The look-at reticle + object label are named leaf widgets inside
         // WG_PlayerHUD_C's tree (Crosshair = Image, LookAtObjectName =
         // TextBlock). We move those leaves directly - not the HUD - so health
         // bars etc. stay put.
         const std::vector<std::string> g_targetNames = { "Crosshair", "LookAtObjectName" };
-        struct ReticleTarget { std::uintptr_t obj; std::uintptr_t cls; };
-        std::vector<ReticleTarget> g_targets;
-        std::uint64_t g_lastTargetScan = 0;
 
-        // Is the object still in the global UObject array at the slot its own
-        // InternalIndex names? A freed UObject leaves its memory readable and
-        // its ClassPrivate intact for as long as the allocator holds the block,
-        // so the class-pointer test on its own reports dead widgets as live.
-        bool RegisteredInObjectArray(std::uintptr_t obj)
-        {
-            const auto& g = Offsets().UObjectGlobals;
-            if (g.kChunkNumElems == 0 || g.kFUObjectItemSize == 0) return false;
-            // UObjectBase packs InternalIndex immediately before ClassPrivate.
-            std::uint32_t index = 0;
-            if (!ue::SafeReadU32(obj + g.kClassPrivate - 4, index)) return false;
+        // The game-state thread owns the scan and publishes its result here;
+        // the game thread adopts a copy when the generation moves.
+        std::mutex g_publishedMutex;
+        std::vector<LiveObject> g_publishedTargets;
+        std::atomic<std::uint32_t> g_publishedGen{0};
 
-            const std::uintptr_t objArr = ue::ModuleBase() + g.kObjObjects;
-            std::uintptr_t chunks = 0;
-            std::uint32_t num = 0;
-            if (!ue::SafeReadPtr(objArr, chunks) || !chunks) return false;
-            if (!ue::SafeReadU32(objArr + g.kObjObjects_Num, num) || index >= num) return false;
-
-            std::uintptr_t chunk = 0;
-            if (!ue::SafeReadPtr(chunks + (static_cast<std::uintptr_t>(index / g.kChunkNumElems) * 8),
-                                 chunk) || !chunk)
-                return false;
-            std::uintptr_t registered = 0;
-            return ue::SafeReadPtr(chunk + static_cast<std::uintptr_t>(index % g.kChunkNumElems)
-                                       * g.kFUObjectItemSize, registered)
-                && registered == obj;
-        }
-
-        // A cached target goes stale when its widget is freed/recreated.
-        bool ReticleTargetLive(const ReticleTarget& t)
-        {
-            std::uintptr_t cls = 0;
-            if (!ue::SafeReadPtr(t.obj + Offsets().UObjectGlobals.kClassPrivate, cls)
-                || cls != t.cls)
-                return false;
-            return RegisteredInObjectArray(t.obj);
-        }
+        // Game-thread copy of the published targets, and the live subset of
+        // it for the current update.
+        std::vector<LiveObject> g_targets;
+        std::uint32_t g_targetsGen = 0;
+        std::vector<LiveObject> g_liveTargets;
 
         // SetRenderTranslation is persistent widget state, so once we have
         // moved the reticle off-centre we must explicitly drive it back to
@@ -140,98 +110,70 @@ namespace RVThereYetHeadTracking::reticle
         bool g_wasOffset = false;
         std::atomic<bool> g_testNudge{false};  // Ctrl+Shift+J: force +300px to verify plumbing
         // Both axes; F7/F8 in a build with RVTY_DEV_HOTKEYS, 1 otherwise.
-        float g_scale = 1.0f;
+        std::atomic<float> g_scale{1.0f};
 
         // Resolve UObject::ProcessEvent off a UWidget's vtable (slot 76). Must
         // be a widget, not an actor - AActor overrides the slot with a net-aware
-        // variant whose derefs fault when called on a widget.
+        // variant whose derefs fault when called on a widget. Retried on the
+        // next widget until a vtable yields an in-module address, so a widget
+        // caught mid-construction does not poison resolution.
         void ResolveProcessEvent(std::uintptr_t widget)
         {
-            // Latch g_peResolved only on SUCCESS, so a call on a widget whose
-            // vtable isn't ready yet (mid-construction, slot 76 null/garbage)
-            // doesn't permanently poison resolution - we retry next call.
-            if (g_peResolved.load(std::memory_order_relaxed)) return;
+            if (g_processEvent.load(std::memory_order_acquire)) return;
             std::uintptr_t vtbl = 0;
             if (!ue::SafeReadPtr(widget, vtbl) || !vtbl) return;
             std::uintptr_t pe = 0;
-            if (ue::SafeReadPtr(vtbl + kProcessEventVtableSlot * 8, pe) && pe >= ue::ModuleBase()) {
-                g_processEvent = reinterpret_cast<ProcessEvent_t>(pe);
-                g_peResolved.store(true, std::memory_order_relaxed);
+            if (ue::SafeReadPtr(vtbl + kProcessEventVtableSlot * 8, pe)
+                && pe >= ue::ModuleBase() && pe < ue::ModuleEnd()) {
+                g_processEvent.store(reinterpret_cast<ProcessEvent_t>(pe), std::memory_order_release);
                 Log::Line("ProcessEvent resolved via vt[%zu] -> RVA 0x%08llx",
                     kProcessEventVtableSlot,
                     static_cast<unsigned long long>(pe - ue::ModuleBase()));
             }
         }
 
-        // The script VM is reached with an address pair derived from the running
-        // game, so a wrong build profile or a widget torn down between the
-        // liveness test and the call faults here. Reported once: it repeats
-        // every frame and the first occurrence is the one that names the cause.
-        bool g_processEventFaultLogged = false;
-
-        bool SafeProcessEvent(void* self, void* fn, void* params)
+        // A plain call into the script VM. A fault inside it is the game's and
+        // is left to crash with its own stack: swallowing it would leave the
+        // engine part-way through the call with whatever locks it took.
+        // Callers establish that the object is live first.
+        void CallProcessEvent(std::uintptr_t self, std::uintptr_t fn, void* params)
         {
-            unsigned long code = 0;
-            __try {
-                g_processEvent(self, fn, params);
-                return true;
-            } __except (code = GetExceptionCode(), EXCEPTION_EXECUTE_HANDLER) {
-                if (!g_processEventFaultLogged) {
-                    g_processEventFaultLogged = true;
-                    Log::Line("ProcessEvent faulted (code 0x%08lx) calling fn=%p on obj=%p - "
-                        "reticle moves for this widget are being dropped",
-                        code, fn, self);
-                }
-                return false;
-            }
+            g_processEvent.load(std::memory_order_acquire)(
+                reinterpret_cast<void*>(self), reinterpret_cast<void*>(fn), params);
         }
 
-        // Read the UMG viewport DPI scale via
-        // UWidgetLayoutLibrary::GetViewportScale(WorldContextObject) -> float.
-        // Static UFunction, so we call it on the library CDO with a live widget
-        // as the world context. One-shot; on failure DPI stays 1.0.
+        // UWidgetLayoutLibrary::GetViewportScale(WorldContextObject) -> float,
+        // called on the library CDO with a live widget as the world context.
+        // On failure DPI stays 1.0.
         void ResolveDpiScale(std::uintptr_t worldCtxWidget)
         {
-            if (g_dpiResolved || !g_processEvent || !worldCtxWidget) return;
-            if (!g_getViewportScaleFn)
-                g_getViewportScaleFn = ue::FindLiveObject("Function", "GetViewportScale", "WidgetLayoutLibrary");
-            if (!g_widgetLayoutCDO)
-                g_widgetLayoutCDO = ue::FindLiveObject("WidgetLayoutLibrary", "Default__WidgetLayoutLibrary", nullptr);
-            if (!g_getViewportScaleFn || !g_widgetLayoutCDO) return;
+            const std::uintptr_t fn = g_getViewportScaleFn.load(std::memory_order_acquire);
+            const std::uintptr_t cdo = g_widgetLayoutCDO.load(std::memory_order_acquire);
+            if (g_dpiResolved || !fn || !cdo) return;
             struct { std::uintptr_t WorldContextObject; float ReturnValue; char pad[24]; } params{};
             params.WorldContextObject = worldCtxWidget;
-            if (SafeProcessEvent(reinterpret_cast<void*>(g_widgetLayoutCDO),
-                                 reinterpret_cast<void*>(g_getViewportScaleFn), &params)) {
-                if (params.ReturnValue > kMinSaneScale && params.ReturnValue < kMaxSaneScale) {
-                    g_viewportDpiScale = params.ReturnValue;
-                    g_dpiResolved = true;
-                    Log::Line("reticle: viewport DPI scale = %.4f (auto-applied)", g_viewportDpiScale);
-                }
+            CallProcessEvent(cdo, fn, &params);
+            if (params.ReturnValue > kMinSaneScale && params.ReturnValue < kMaxSaneScale) {
+                g_viewportDpiScale = params.ReturnValue;
+                g_dpiResolved = true;
+                Log::Line("reticle: viewport DPI scale = %.4f (auto-applied)", g_viewportDpiScale);
             }
         }
 
         // Log the slate/widget viewport size (the space
-        // RenderTransform.Translation is expressed in) as a diagnostic - it can
-        // differ from the render viewport under reduced internal resolution,
-        // which shows up as a reticle scale mismatch.
-        //
-        // Logged on change, not once: the size also moves on a resolution
-        // switch, a windowed/fullscreen toggle and a move to another monitor,
-        // so a latched first read would report a stale size to a player whose
-        // mismatch appeared after one of those. A first read of (0,0) or (1,1)
-        // is the widget reporting before layout, so it is skipped and retried.
+        // RenderTransform.Translation is expressed in) on change, as a
+        // diagnostic - it can differ from the render viewport under reduced
+        // internal resolution, which shows up as a reticle scale mismatch. A
+        // read of (0,0) or (1,1) is the widget reporting before layout.
         void LogViewportSize(std::uintptr_t worldCtxWidget)
         {
-            if (!g_processEvent || !worldCtxWidget || !g_widgetLayoutCDO) return;
-            static std::uintptr_t s_getViewportSizeFn = 0;
-            if (!s_getViewportSizeFn)
-                s_getViewportSizeFn = ue::FindLiveObject("Function", "GetViewportSize", "WidgetLayoutLibrary");
-            if (!s_getViewportSizeFn) return;
+            const std::uintptr_t fn = g_getViewportSizeFn.load(std::memory_order_acquire);
+            const std::uintptr_t cdo = g_widgetLayoutCDO.load(std::memory_order_acquire);
+            if (!fn || !cdo) return;
 
             struct { std::uintptr_t WorldContextObject; double RX, RY; char pad[16]; } vs{};
             vs.WorldContextObject = worldCtxWidget;
-            if (!SafeProcessEvent(reinterpret_cast<void*>(g_widgetLayoutCDO),
-                                  reinterpret_cast<void*>(s_getViewportSizeFn), &vs)) return;
+            CallProcessEvent(cdo, fn, &vs);
             if (vs.RX <= 1.0 || vs.RY <= 1.0) return;
 
             static double s_loggedX = 0.0;
@@ -243,34 +185,30 @@ namespace RVThereYetHeadTracking::reticle
         }
 
         // Read the reticle widget's accumulated geometry scale via
-        // UWidget::GetCachedGeometry() -> FGeometry. One-shot; on failure the
-        // scale stays 0 (unused).
-        // Find the RENDERED reticle instance among the (possibly pooled)
-        // targets - the one whose cached geometry has a non-zero size - and
-        // take its accumulated scale. This build's FGeometry (confirmed
-        // empirically from a default-constructed instance reading Scale=1.0):
-        // FVector2f Size @ 0x00, float Scale @ 0x08. A pooled/empty instance
-        // dumps as zeros with a lone 1.0 at +8, so we gate on Size.
-        void ResolveWidgetScale()
+        // UWidget::GetCachedGeometry() -> FGeometry, from the RENDERED instance
+        // among the (possibly pooled) targets - the one whose cached geometry
+        // has a non-zero size. This build's FGeometry (confirmed empirically
+        // from a default-constructed instance reading Scale=1.0): FVector2f
+        // Size @ 0x00, float Scale @ 0x08. A pooled/empty instance dumps as
+        // zeros with a lone 1.0 at +8, so we gate on Size. Re-read on every
+        // poll so a resolution or DPI change reaches the reticle; while no
+        // instance is rendered the last good value stands.
+        void ReadWidgetScale(const std::vector<LiveObject>& live)
         {
-            if (g_widgetGeoScale > 0.0f || !g_processEvent || g_targets.empty()) return;
-            if (!g_getCachedGeometryFn)
-                g_getCachedGeometryFn = ue::FindLiveObject("Function", "GetCachedGeometry", "Widget");
-            if (!g_getCachedGeometryFn) return;
-
-            for (const ReticleTarget& t : g_targets) {
-                if (!ReticleTargetLive(t)) continue;
+            const std::uintptr_t fn = g_getCachedGeometryFn.load(std::memory_order_acquire);
+            if (!fn) return;
+            for (const LiveObject& t : live) {
                 alignas(8) unsigned char geo[192] = {};
-                if (!SafeProcessEvent(reinterpret_cast<void*>(t.obj),
-                                      reinterpret_cast<void*>(g_getCachedGeometryFn), geo))
-                    continue;
+                CallProcessEvent(t.obj, fn, geo);
                 float sizeX = 0, sizeY = 0, scale = 0;
                 std::memcpy(&sizeX, geo + 0x00, 4);
                 std::memcpy(&sizeY, geo + 0x04, 4);
                 std::memcpy(&scale, geo + 0x08, 4);
                 if (sizeX > 1.0f && sizeY > 1.0f && scale > kMinSaneScale && scale < kMaxSaneScale) {
-                    g_widgetGeoScale = scale;
-                    Log::Line("reticle: widget geometry scale = %.4f (auto-applied)", scale);
+                    if (std::fabs(scale - g_widgetGeoScale) > 1e-4f) {
+                        g_widgetGeoScale = scale;
+                        Log::Line("reticle: widget geometry scale = %.4f (auto-applied)", scale);
+                    }
                     return;
                 }
             }
@@ -298,9 +236,9 @@ namespace RVThereYetHeadTracking::reticle
             p.WY = loc->Y + dir.Y * kAimDist;
             p.WZ = loc->Z + dir.Z * kAimDist;
             p.bViewportRelative = true;
-            if (!SafeProcessEvent(reinterpret_cast<void*>(g_gameplayStaticsCDO),
-                                  reinterpret_cast<void*>(g_projectW2SFn), &p) || !p.ReturnValue)
-                return false;
+            CallProcessEvent(g_gameplayStaticsCDO.load(std::memory_order_acquire),
+                             g_projectW2SFn.load(std::memory_order_acquire), &p);
+            if (!p.ReturnValue) return false;
             sx = p.SX; sy = p.SY;
             return true;
         }
@@ -315,7 +253,9 @@ namespace RVThereYetHeadTracking::reticle
                                            const FQuat4d& baseQ, const FQuat4d& viewQ,
                                            double& dx, double& dy)
         {
-            if (!g_processEvent) return false;
+            if (!g_processEvent.load(std::memory_order_acquire)
+                || !g_projectW2SFn.load(std::memory_order_acquire)
+                || !g_gameplayStaticsCDO.load(std::memory_order_acquire)) return false;
             // Re-entrancy guard: ProjectWorldToScreen could, in principle, drive
             // the engine to rebuild a view and re-enter the builder hook. Never
             // start a projection from within a projection - the inner hook call
@@ -324,12 +264,6 @@ namespace RVThereYetHeadTracking::reticle
             if (s_inProjection) return false;
             struct Guard { ~Guard() { s_inProjection = false; } } guard;
             s_inProjection = true;
-
-            if (!g_projectW2SFn)
-                g_projectW2SFn = ue::FindLiveObject("Function", "ProjectWorldToScreen", "GameplayStatics");
-            if (!g_gameplayStaticsCDO)
-                g_gameplayStaticsCDO = ue::FindLiveObject("GameplayStatics", "Default__GameplayStatics", nullptr);
-            if (!g_projectW2SFn || !g_gameplayStaticsCDO) return false;
 
             std::uintptr_t pc = 0;
             if (!ue::SafeReadPtr(reinterpret_cast<std::uintptr_t>(self)
@@ -345,7 +279,7 @@ namespace RVThereYetHeadTracking::reticle
             // Differential in the rendered view's own pixel scale. Only the
             // developer tuning scale applies here; the geometry scale (which
             // folds in DPI) is divided out later in DriveReticle.
-            const double s = static_cast<double>(g_scale);
+            const double s = static_cast<double>(g_scale.load(std::memory_order_relaxed));
             dx = (aimSX - fwdSX) * s;
             dy = (aimSY - fwdSY) * s;
             return true;
@@ -396,93 +330,49 @@ namespace RVThereYetHeadTracking::reticle
             return (w > 1.0 && h > 1.0);
         }
 
-        // Is this object name one of our reticle targets? (exact match)
-        bool IsReticleTargetName(const std::string& n)
+        // Take the game-state thread's latest target list.
+        void AdoptPublishedTargets()
         {
-            for (const std::string& t : g_targetNames) if (n == t) return true;
-            return false;
-        }
-
-        // (Re)find the live target widgets by name. Rate-limited so a ~90k
-        // UObject scan doesn't run every frame (esp. before the HUD exists).
-        void RefreshReticleTargets()
-        {
-            const std::uint64_t now = GetTickCount64();
-            if (now - g_lastTargetScan < kTargetRescanMs) return;
-            g_lastTargetScan = now;
-
-            g_targets.clear();
-            ue::ForEachUObject([&](std::uintptr_t obj) -> bool {
-                const std::string on = ue::ObjectName(obj);
-                if (!IsReticleTargetName(on)) return false;
-                // A texture asset is also named Crosshair. Widget functions
-                // cannot be invoked on that object, even with a valid vtable.
-                const std::string className = ue::ClassName(obj);
-                if ((on == "Crosshair" && className != "Image") ||
-                    (on == "LookAtObjectName" && className != "TextBlock")) return false;
-                std::uintptr_t cls = 0;
-                ue::SafeReadPtr(obj + Offsets().UObjectGlobals.kClassPrivate, cls);
-                g_targets.push_back({ obj, cls });
-                if (!g_peResolved.load()) ResolveProcessEvent(obj);
-                return false;
-            });
-            if (!g_targets.empty()) {
-                static bool s_once = false;
-                if (!s_once) {
-                    s_once = true;
-                    Log::Line("reticle: resolved %zu target widget(s)", g_targets.size());
-                }
-            }
+            if (g_publishedGen.load(std::memory_order_acquire) == g_targetsGen) return;
+            std::lock_guard<std::mutex> lock(g_publishedMutex);
+            g_targets = g_publishedTargets;
+            g_targetsGen = g_publishedGen.load(std::memory_order_relaxed);
         }
 
         // Move the reticle target widgets to (dx, dy) client pixels from centre,
-        // or reset to (0,0) when there's no valid offset. Called from the hook.
+        // or reset to (0,0) when there's no valid offset. Game thread only.
         void DriveReticle(double dx, double dy, bool valid)
         {
-            // SetRenderTranslation isn't registered until UMG spins up, so
-            // resolve it lazily (rate-limited) rather than at bootstrap.
-            if (!g_setRenderTranslationFn) {
-                static std::uint64_t s_lastFnScan = 0;
-                const std::uint64_t now = GetTickCount64();
-                if (now - s_lastFnScan < kFnScanRetryMs) return;
-                s_lastFnScan = now;
-                g_setRenderTranslationFn = ue::FindLiveObject("Function", "SetRenderTranslation", "Widget");
-                if (g_setRenderTranslationFn) {
-                    Log::Line("reticle: SetRenderTranslation resolved lazily -> RVA 0x%llx",
-                        static_cast<unsigned long long>(g_setRenderTranslationFn - ue::ModuleBase()));
-                } else {
-                    return;
-                }
-            }
+            const std::uintptr_t setFn = g_setRenderTranslationFn.load(std::memory_order_acquire);
+            if (!setFn || !g_processEvent.load(std::memory_order_acquire)) return;
 
-            // Validate the cache; refresh if empty or any entry went stale.
-            bool needRefresh = g_targets.empty();
-            for (const ReticleTarget& t : g_targets) {
-                if (!ReticleTargetLive(t)) { needRefresh = true; break; }
+            AdoptPublishedTargets();
+            g_liveTargets.clear();
+            for (const LiveObject& t : g_targets) {
+                if (IsLive(t)) g_liveTargets.push_back(t);
             }
-            if (needRefresh) RefreshReticleTargets();
-            if (g_targets.empty()) {
+            if (g_liveTargets.empty()) {
                 // No live widgets means no persistent translation left to
                 // reset - it died with the widget, and a recreated one starts
-                // at (0,0). Clearing the flag stops ResetIfOffset from
-                // re-triggering the UObject rescan every 500ms in menus.
+                // at (0,0). The game-state thread finds the replacements.
                 g_wasOffset = false;
                 return;
             }
-            if (!g_processEvent) return;
 
-            // Resolve the viewport DPI scale once, using a live target widget
-            // as the world context.
-            if (!g_dpiResolved) ResolveDpiScale(g_targets.front().obj);
-            LogViewportSize(g_targets.front().obj);
-            ResolveWidgetScale();
+            const std::uint64_t now = GetTickCount64();
+            if (now - g_lastScalePoll >= kScalePollMs) {
+                g_lastScalePoll = now;
+                ResolveDpiScale(g_liveTargets.front().obj);
+                LogViewportSize(g_liveTargets.front().obj);
+                ReadWidgetScale(g_liveTargets);
+            }
 
             // RenderTransform.Translation is in the widget's LOCAL space, so
             // divide the screen-pixel offset by the widget's geometry scale
             // (the HUD renders the crosshair below 1.0 scale). The geometry
             // scale already folds in DPI + any HUD layout scale, so it is the
-            // sole divisor; before it resolves, fall back to the DPI scale as
-            // a best-effort approximation.
+            // sole divisor; before it has been read, fall back to the DPI scale
+            // as a best-effort approximation.
             const double gscale = (g_widgetGeoScale > 0.0f)
                 ? static_cast<double>(g_widgetGeoScale)
                 : static_cast<double>(g_viewportDpiScale);
@@ -490,13 +380,12 @@ namespace RVThereYetHeadTracking::reticle
             // UMG SetRenderTranslation(FVector2D) - FVector2D is 2 doubles under
             // LWC; trailing pad guards the ProcessEvent param copy.
             const bool nudge = g_testNudge.load(std::memory_order_relaxed);
-            struct { double X; double Y; char pad[16]; } tr{};
+            struct Translation { double X; double Y; char pad[16]; } tr{};
             tr.X = nudge ? 300.0 : (valid ? dx / gscale : 0.0);
             tr.Y = nudge ?   0.0 : (valid ? dy / gscale : 0.0);
-            for (const ReticleTarget& t : g_targets) {
-                if (!ReticleTargetLive(t)) continue;
-                SafeProcessEvent(reinterpret_cast<void*>(t.obj),
-                                 reinterpret_cast<void*>(g_setRenderTranslationFn), &tr);
+            for (const LiveObject& t : g_liveTargets) {
+                Translation params = tr;
+                CallProcessEvent(t.obj, setFn, &params);
             }
             g_wasOffset = (tr.X != 0.0 || tr.Y != 0.0);
         }
@@ -529,8 +418,9 @@ namespace RVThereYetHeadTracking::reticle
 
             // The slate/DPI conversion is handled by dividing out the widget
             // geometry scale in DriveReticle.
-            dx = (static_cast<double>(proj.screenX) - vw * 0.5) * static_cast<double>(g_scale);
-            dy = (static_cast<double>(proj.screenY) - vh * 0.5) * static_cast<double>(g_scale);
+            const double scale = static_cast<double>(g_scale.load(std::memory_order_relaxed));
+            dx = (static_cast<double>(proj.screenX) - vw * 0.5) * scale;
+            dy = (static_cast<double>(proj.screenY) - vh * 0.5) * scale;
 
             static std::uint64_t s_lastLog = 0;
             static int s_logCount = 0;
@@ -541,9 +431,15 @@ namespace RVThereYetHeadTracking::reticle
                 s_lastLog = now;
                 ++s_logCount;
                 Log::Line("aim-offset: vw=%.0f vh=%.0f fov=%.1f scale=%.2f ndc=(%.3f,%.3f) -> dx=%.1f dy=%.1f",
-                    vw, vh, fovDeg, g_scale, proj.ndcX, proj.ndcY, dx, dy);
+                    vw, vh, fovDeg, scale, proj.ndcX, proj.ndcY, dx, dy);
             }
             return true;
+        }
+
+        bool SameObjects(const std::vector<LiveObject>& a, const std::vector<LiveObject>& b)
+        {
+            return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(),
+                [](const LiveObject& x, const LiveObject& y) { return x.obj == y.obj && x.cls == y.cls; });
         }
     }
 
@@ -552,18 +448,67 @@ namespace RVThereYetHeadTracking::reticle
         std::string tn;
         for (const std::string& n : g_targetNames) { if (!tn.empty()) tn += ","; tn += n; }
         Log::Line("reticle: targets=[%s] scale=%.2f "
-            "(SetRenderTranslation resolves lazily once UMG is up)",
-            tn.c_str(), g_scale);
+            "(functions and widgets resolve on the game-state thread once UMG is up)",
+            tn.c_str(), g_scale.load());
+    }
+
+    void ResolveReflection()
+    {
+        const auto resolve = [](std::atomic<std::uintptr_t>& slot, const char* cls,
+                                const char* name, const char* outer) {
+            if (slot.load(std::memory_order_relaxed)) return;
+            const std::uintptr_t obj = ue::FindLiveObject(cls, name, outer);
+            if (!obj) return;
+            slot.store(obj, std::memory_order_release);
+            Log::Line("reticle: resolved %s %s -> 0x%llx", outer ? outer : cls, name,
+                static_cast<unsigned long long>(obj));
+        };
+        resolve(g_setRenderTranslationFn, "Function", "SetRenderTranslation", "Widget");
+        resolve(g_getCachedGeometryFn, "Function", "GetCachedGeometry", "Widget");
+        resolve(g_projectW2SFn, "Function", "ProjectWorldToScreen", "GameplayStatics");
+        resolve(g_gameplayStaticsCDO, "GameplayStatics", "Default__GameplayStatics", nullptr);
+        resolve(g_getViewportScaleFn, "Function", "GetViewportScale", "WidgetLayoutLibrary");
+        resolve(g_getViewportSizeFn, "Function", "GetViewportSize", "WidgetLayoutLibrary");
+        resolve(g_widgetLayoutCDO, "WidgetLayoutLibrary", "Default__WidgetLayoutLibrary", nullptr);
+    }
+
+    void RefreshTargets()
+    {
+        std::vector<LiveObject> current;
+        {
+            std::lock_guard<std::mutex> lock(g_publishedMutex);
+            current = g_publishedTargets;
+        }
+        if (!current.empty() && std::all_of(current.begin(), current.end(), IsLive)) return;
+
+        std::vector<LiveObject> found;
+        ue::ForEachUObject([&](std::uintptr_t obj) -> bool {
+            const std::string on = ue::ObjectName(obj);
+            if (std::find(g_targetNames.begin(), g_targetNames.end(), on) == g_targetNames.end())
+                return false;
+            // A texture asset is also named Crosshair. Widget functions
+            // cannot be invoked on that object, even with a valid vtable.
+            const std::string className = ue::ClassName(obj);
+            if ((on == "Crosshair" && className != "Image") ||
+                (on == "LookAtObjectName" && className != "TextBlock")) return false;
+            found.push_back(CaptureLiveObject(obj));
+            ResolveProcessEvent(obj);
+            return false;
+        });
+
+        if (SameObjects(found, current)) return;
+        const std::size_t count = found.size();
+        {
+            std::lock_guard<std::mutex> lock(g_publishedMutex);
+            g_publishedTargets = std::move(found);
+            g_publishedGen.fetch_add(1, std::memory_order_release);
+        }
+        Log::Line("reticle: resolved %zu target widget(s)", count);
     }
 
     void UpdateFromView(void* self, void* outView,
                         const FQuat4d& baseQ, const FQuat4d& viewQ)
     {
-        static std::atomic<std::uint64_t> s_lastUpdate{0};
-        const std::uint64_t now = GetTickCount64();
-        if (now - s_lastUpdate.load(std::memory_order_relaxed) < kUpdateIntervalMs) return;
-        s_lastUpdate.store(now, std::memory_order_relaxed);
-
         float fovDeg = 0.0f;
         std::memcpy(&fovDeg,
             reinterpret_cast<void*>(reinterpret_cast<std::uintptr_t>(outView)
@@ -591,7 +536,8 @@ namespace RVThereYetHeadTracking::reticle
 
     void AdjustScale(float delta)
     {
-        g_scale = std::clamp(g_scale + delta, 0.1f, 5.0f);
-        Log::Line("reticle scale -> %.2f", g_scale);
+        const float next = std::clamp(g_scale.load() + delta, 0.1f, 5.0f);
+        g_scale.store(next);
+        Log::Line("reticle scale -> %.2f", next);
     }
 }

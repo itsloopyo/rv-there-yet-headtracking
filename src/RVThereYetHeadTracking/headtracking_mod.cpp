@@ -4,6 +4,7 @@
 #include "lean_trace.h"
 #include "position_boundary.h"
 #include "config.h"
+#include "uobject_live.h"
 
 #include <atomic>
 #include <cmath>
@@ -101,7 +102,7 @@ namespace RVThereYetHeadTracking
         HANDLE g_bootstrapThread = nullptr;
         HANDLE g_gameStateThread = nullptr;
 
-        // Rotation pipeline. The view-builder hook fires on the render thread
+        // Rotation pipeline. The view-builder hook fires on the game thread
         // only, so this is single-thread access - no locks needed.
         cameraunlock::PoseInterpolator g_interp;
         std::int64_t g_lastSampleTs = 0;
@@ -285,7 +286,8 @@ namespace RVThereYetHeadTracking
             static thread_local bool   cPosValid = false;
 
             const std::uint64_t nowUs = cameraunlock::time::QpcNowMicros();
-            if (nowUs - s_lastPoseUs > 500) {  // > 0.5 ms => new frame
+            const bool newFrame = nowUs - s_lastPoseUs > 500;  // > 0.5 ms => new frame
+            if (newFrame) {
                 s_lastPoseUs = nowUs;
                 float y = 0.0f, p = 0.0f, r = 0.0f;
                 cRotValid = GetProcessedRotation(y, p, r);
@@ -351,8 +353,9 @@ namespace RVThereYetHeadTracking
             }
 
             // Reticle compensation: move the interaction widgets to where the
-            // clean aim lands in the tracked view.
-            reticle::UpdateFromView(self, outView, baseQ, viewQ);
+            // clean aim lands in the tracked view. Once per frame, on the same
+            // gate as the pose, so the widget moves on every frame the view does.
+            if (newFrame) reticle::UpdateFromView(self, outView, baseQ, viewQ);
         }
 
         bool InstallViewBuilderHook()
@@ -496,31 +499,43 @@ namespace RVThereYetHeadTracking
             return settings;
         }
 
-        // Off-thread gameplay detector. A gameplay HUD widget is live only
-        // during actual play (not the main menu / loading screens), so its
-        // presence is our in-gameplay signal. Runs every ~400ms off the render
-        // path - a full UObject scan inline would hitch the frame. Reflection-
-        // based so it needs no game-specific struct offsets.
+        // Off-thread gameplay detector and reflection resolver. A gameplay HUD
+        // widget is live only during actual play (not the main menu / loading
+        // screens), so its presence is our in-gameplay signal. Every UObject
+        // scan the mod needs runs here, every ~400ms, because a full scan
+        // (~90k objects) inline would hitch the frame. Once the HUD and the
+        // reticle widgets are found they are only re-checked for liveness, so
+        // steady gameplay costs no scans at all.
         DWORD WINAPI GameStateThread(LPVOID)
         {
             static const char* kGameplayHuds[] = {
                 "WG_VehicleHUD_C", "WG_PlayerHUD_C", "WG_PlayerInteraction_C"
             };
+            LiveObject hud;
             while (!g_stopThreads.load(std::memory_order_relaxed)) {
                 Sleep(400);
                 if (g_stopThreads.load(std::memory_order_relaxed)) break;
                 if (ue::ModuleBase() == 0) continue;
-                bool found = false;
-                ue::ForEachUObject([&](std::uintptr_t obj) -> bool {
-                    const std::string cn = ue::ClassName(obj);
-                    for (const char* h : kGameplayHuds) {
-                        if (cn == h && !ue::ContainsCI(ue::ObjectName(obj), "Default__")) {
-                            found = true;
-                            return true;  // stop early
+
+                lean_trace::ResolveReflection();
+                reticle::ResolveReflection();
+
+                if (!IsLive(hud)) {
+                    hud = {};
+                    ue::ForEachUObject([&](std::uintptr_t obj) -> bool {
+                        const std::string cn = ue::ClassName(obj);
+                        for (const char* h : kGameplayHuds) {
+                            if (cn == h && !ue::ContainsCI(ue::ObjectName(obj), "Default__")) {
+                                hud = CaptureLiveObject(obj);
+                                return true;
+                            }
                         }
-                    }
-                    return false;
-                });
+                        return false;
+                    });
+                }
+                const bool found = hud.obj != 0;
+                if (found) reticle::RefreshTargets();
+
                 const bool was = g_inGameplay.exchange(found);
                 if (was != found) {
                     Log::Line("game-state: %s", found ? "GAMEPLAY (tracking active)"

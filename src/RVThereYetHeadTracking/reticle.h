@@ -13,10 +13,16 @@ namespace RVThereYetHeadTracking::reticle
     // One-line log of the resolved reticle config, for the bootstrap banner.
     void LogBootstrapSummary();
 
-    // Per rendered view, from the builder hook: project the clean-aim
-    // direction into the tracked view and move the target widgets there.
-    // Throttled internally (~100 Hz - ProcessEvent is a script-VM call).
-    // self/outView are the builder hook's arguments.
+    // Game-state thread only. Each runs a full UObject scan while something
+    // is unresolved, which is too slow for the game thread. ResolveReflection
+    // finds the UFunctions and CDOs; RefreshTargets finds the reticle widgets,
+    // and rescans only when the published ones have gone stale.
+    void ResolveReflection();
+    void RefreshTargets();
+
+    // Once per frame, from the builder hook on the game thread: project the
+    // clean-aim direction into the tracked view and move the target widgets
+    // there. self/outView are the builder hook's arguments.
     void UpdateFromView(void* self, void* outView,
                         const ::cameraunlock::unreal::FQuat4d& baseQ,
                         const ::cameraunlock::unreal::FQuat4d& viewQ);

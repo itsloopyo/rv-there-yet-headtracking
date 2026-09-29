@@ -11,6 +11,17 @@
 - Ignore the texture asset named `Crosshair` when finding HUD widgets, avoiding
   invalid widget calls and repeated engine warnings.
 
+### Fixed
+
+- Remove the frame hitches when entering gameplay and whenever the HUD is
+  rebuilt. The mod now finds the game's HUD and engine functions in the
+  background instead of on the game thread.
+- The reticle now moves with the view on every frame. At high refresh rates it
+  used to update about 64 times a second and lag behind head movement.
+- The reticle stays in the right place after a resolution, window mode or
+  monitor change.
+- The collision check for leaning runs once a frame instead of several times.
+
 ### Added
 
 - Clamp positional head tracking against world geometry, with immediate stopping and smooth release.

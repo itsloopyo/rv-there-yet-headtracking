@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <string>
@@ -31,9 +32,11 @@ struct Layout {
     std::uintptr_t function = 0, library = 0, engine = 0;
     ProcessEvent dispatch = nullptr;
 };
+// Written once by ResolveReflection on the game-state thread, then published
+// to the game thread by the release store to g_ready.
 Layout g_layout;
-bool g_ready = false, g_failed = false, g_enabled = true;
-std::uint64_t g_lastResolve = 0;
+std::atomic<bool> g_ready{false}, g_failed{false};
+bool g_enabled = true;
 float g_margin = 15.0f, g_release = 0.9f;
 int g_channel = 0;
 
@@ -68,13 +71,8 @@ bool ReadField(std::uintptr_t owner, const char* name, const char* type, std::si
     return false;
 }
 
-bool Resolve()
+void ResolveLayout()
 {
-    if (g_ready) return true;
-    if (g_failed) return false;
-    const auto now = GetTickCount64();
-    if (now - g_lastResolve < 1000) return false;
-    g_lastResolve = now;
     auto& l = g_layout;
     l.function = ue::FindLiveObject("Function", "SphereTraceSingle", "KismetSystemLibrary");
     l.library = ue::FindLiveObject("KismetSystemLibrary", "Default__KismetSystemLibrary", nullptr);
@@ -83,7 +81,7 @@ bool Resolve()
     const auto controller = ue::FindLiveObject("Class", "Controller", "/Script/Engine");
     const auto engine = ue::FindLiveObject("Class", "Engine", "/Script/Engine");
     const auto view = ue::FindLiveObject("ScriptStruct", "MinimalViewInfo", "/Script/Engine");
-    if (!l.function || !l.library || !l.engine || !hit || !controller || !engine || !view) return false;
+    if (!l.function || !l.library || !l.engine || !hit || !controller || !engine || !view) return;
     std::uint32_t frameSize = 0, hitSize = 0;
     bool valid = ue::SafeReadU32(l.function + 0x58, frameSize) && frameSize > 0 && frameSize <= 1024 &&
         ue::SafeReadU32(hit + 0x58, hitSize) && hitSize > 0 && hitSize <= frameSize;
@@ -113,15 +111,14 @@ bool Resolve()
     valid = ue::SafeReadPtr(l.library, table) && ue::SafeReadPtr(table + 76 * 8, dispatch) &&
         dispatch >= ue::ModuleBase() && dispatch < ue::ModuleEnd() && valid;
     if (!valid) {
-        g_failed = true;
+        g_failed.store(true);
         Log::Line("lean-trace: incompatible reflection layout; positional lean withheld");
-        return false;
+        return;
     }
     l.dispatch = reinterpret_cast<ProcessEvent>(dispatch);
-    g_ready = true;
+    g_ready.store(true, std::memory_order_release);
     Log::Line("lean-trace: SphereTraceSingle resolved; frame=%u hit=%u pawn=+0x%zx near=+0x%zx viewNear=+0x%zx margin=%.1fcm channel=%d",
         frameSize, hitSize, l.pawn.offset, l.nearPlane.offset, l.viewNearPlane.offset, g_margin, g_channel);
-    return true;
 }
 
 struct QueryContext {
@@ -174,7 +171,7 @@ LeanObstruction Query(void* context, const Vec3&, const Vec3& direction, float d
 
 struct CameraState {
     cameraunlock::camera::LeanClamp clamp;
-    ue::FVector eye{};
+    ue::FVector eye{}, wanted{}, allowed{};
     std::uintptr_t pawn = 0;
     std::uint64_t lastUs = 0, lastLog = 0;
     bool contact = false, failed = false;
@@ -189,9 +186,15 @@ void Configure(const Config& config)
     g_channel = config.collision_channel;
     g_release = config.collision_release_smoothing;
     if (g_channel < 0 || g_channel > 31 || !std::isfinite(g_margin) || g_margin < 0) {
-        g_failed = true;
+        g_failed.store(true);
         Log::Line("lean-trace: invalid margin/channel; positional lean withheld while collision is enabled");
     }
+}
+
+void ResolveReflection()
+{
+    if (!g_enabled || g_ready.load(std::memory_order_acquire) || g_failed.load()) return;
+    ResolveLayout();
 }
 
 void Reset() { g_cameras.clear(); }
@@ -199,7 +202,7 @@ void Reset() { g_cameras.clear(); }
 ue::FVector Clamp(void* owner, void* view, const ue::FVector& wanted)
 {
     if (!g_enabled) return wanted;
-    if (!Resolve()) {
+    if (!g_ready.load(std::memory_order_acquire) || g_failed.load()) {
         static std::uint64_t lastLog = 0;
         const auto now = GetTickCount64();
         if (now - lastLog >= 5000) {
@@ -227,8 +230,8 @@ ue::FVector Clamp(void* owner, void* view, const ue::FVector& wanted)
     }
     if (viewNear > 0) nearPlane = viewNear;
     if (nearPlane <= 0) {
-        if (!g_failed) Log::Line("lean-trace: invalid live near plane %.3f; positional lean withheld", nearPlane);
-        g_failed = true;
+        if (!g_failed.exchange(true))
+            Log::Line("lean-trace: invalid live near plane %.3f; positional lean withheld", nearPlane);
         Reset();
         return {};
     }
@@ -236,6 +239,15 @@ ue::FVector Clamp(void* owner, void* view, const ue::FVector& wanted)
     QueryContext context{eye, pawn, std::max(g_margin, nearPlane + 1.0f), nearPlane};
     auto& state = g_cameras[owner];
     const auto now = cameraunlock::time::QpcNowMicros();
+    // The builder runs several times a frame for the same view. A repeat with
+    // the same eye and lean inside the frame gets the answer the first call's
+    // sweep gave, instead of sweeping the world again.
+    const auto same = [](const ue::FVector& a, const ue::FVector& b) {
+        return a.X == b.X && a.Y == b.Y && a.Z == b.Z;
+    };
+    if (state.lastUs != 0 && now - state.lastUs < 500 && state.pawn == pawn &&
+        same(state.eye, eye) && same(state.wanted, wanted))
+        return state.allowed;
     const double dx = eye.X - state.eye.X, dy = eye.Y - state.eye.Y, dz = eye.Z - state.eye.Z;
     if (state.pawn != pawn || now - state.lastUs > 250000 || dx * dx + dy * dy + dz * dz > 10000) state.clamp.Reset();
     const float dt = std::min(0.1f, static_cast<float>(now - state.lastUs) * 1e-6f);
@@ -253,10 +265,12 @@ ue::FVector Clamp(void* owner, void* view, const ue::FVector& wanted)
         state.lastLog = now;
     }
     state.eye = eye;
+    state.wanted = wanted;
+    state.allowed = {allowed.x, allowed.y, allowed.z};
     state.pawn = pawn;
     state.lastUs = now;
     state.contact = contact;
     state.failed = failed;
-    return {allowed.x, allowed.y, allowed.z};
+    return state.allowed;
 }
 }
