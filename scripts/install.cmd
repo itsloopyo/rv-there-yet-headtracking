@@ -24,7 +24,7 @@
 :: if it disagrees with the pushed tag. install.ps1 also reads it (preferring
 :: it over pixi.toml) to stamp .headtracking-state.json, so the line must stay
 :: present and formatted exactly as below.
-set "MOD_VERSION=0.3.0"
+set "MOD_VERSION=0.5.0"
 
 :: Pinned off for the arg parser below. With delayed expansion on, cmd.exe
 :: strips a `!` out of the expanded text of `set "_ARG=%~1"`, so a real game
